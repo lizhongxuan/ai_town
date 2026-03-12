@@ -27,6 +27,7 @@ type Config struct {
 	JWTSecret    string `json:"jwtSecret"`
 	AdminToken   string `json:"adminToken"`
 	Debug        bool   `json:"debug"`
+	TownV3Enabled *bool `json:"townV3Enabled,omitempty"`
 	mu           sync.RWMutex
 }
 
@@ -46,12 +47,13 @@ func Load() (*Config, error) {
 
 	cfgPath := filepath.Join(dataDir, ConfigFileName)
 	cfg := &Config{
-		Port:        DefaultPort,
-		DataDir:     dataDir,
-		OpenClawDir: getDefaultOpenClawDir(),
-		JWTSecret:   DefaultJWTSecret,
-		AdminToken:  DefaultAdminToken,
-		Debug:       false,
+		Port:          DefaultPort,
+		DataDir:       dataDir,
+		OpenClawDir:   getDefaultOpenClawDir(),
+		JWTSecret:     DefaultJWTSecret,
+		AdminToken:    DefaultAdminToken,
+		Debug:         false,
+		TownV3Enabled: boolPtr(true),
 	}
 
 	// 从环境变量覆盖
@@ -81,6 +83,9 @@ func Load() (*Config, error) {
 	}
 	if os.Getenv("CLAWPANEL_DEBUG") == "true" {
 		cfg.Debug = true
+	}
+	if v := strings.TrimSpace(os.Getenv("TOWN_V3_ENABLED")); v != "" {
+		cfg.TownV3Enabled = boolPtr(parseEnvBool(v))
 	}
 
 	// 尝试从文件加载
@@ -171,6 +176,31 @@ func (c *Config) GetAdminToken() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.AdminToken
+}
+
+func (c *Config) IsTownV3Enabled() bool {
+	if c == nil {
+		return true
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.TownV3Enabled == nil {
+		return true
+	}
+	return *c.TownV3Enabled
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func parseEnvBool(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "0", "false", "no", "off", "disabled":
+		return false
+	default:
+		return true
+	}
 }
 
 // getDataDir 获取数据目录（与可执行文件同目录）

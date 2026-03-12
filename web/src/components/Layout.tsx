@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, ScrollText, Radio, Sparkles, Clock, Settings,
   Moon, Sun, LogOut, Menu, FolderOpen, Languages, MessageSquare,
-  RotateCw, RefreshCw, Power, Puzzle, Bot, Search, Bell, ChevronDown, GitBranch,
+  RotateCw, RefreshCw, Power, Puzzle, Bot, Bell, GitBranch, Map as MapIcon,
 } from 'lucide-react';
 import { useI18n } from '../i18n';
 import AIAssistant from './AIAssistant';
@@ -54,14 +54,10 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
   const { t, locale, setLocale } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
+  const isTownPage = location.pathname === '/town';
   const enableAgents = import.meta.env.VITE_FEATURE_AGENTS !== 'false';
   const [tasks, setTasks] = useState<TaskInfo[]>([]);
   const [taskLogs, setTaskLogs] = useState<Record<string, string[]>>({});
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const searchRef = useRef<HTMLDivElement | null>(null);
-  const profileRef = useRef<HTMLDivElement | null>(null);
 
   const loadTasks = useCallback(async () => {
     try {
@@ -100,6 +96,7 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
 
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: t.nav.dashboard },
+    { to: '/town', icon: MapIcon, label: locale === 'zh-CN' ? 'AI 小镇' : 'Town' },
     { to: '/logs', icon: ScrollText, label: t.nav.activityLog },
     { to: '/channels', icon: Radio, label: t.nav.channels },
     { to: '/skills', icon: Sparkles, label: t.nav.skills },
@@ -137,21 +134,6 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     };
   }, []);
 
-  useEffect(() => {
-    const handlePointerDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (searchRef.current && !searchRef.current.contains(target)) {
-        setSearchOpen(false);
-      }
-      if (profileRef.current && !profileRef.current.contains(target)) {
-        setProfileOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    return () => document.removeEventListener('mousedown', handlePointerDown);
-  }, []);
-
   const toggleDark = () => {
     setDark(d => {
       const n = !d;
@@ -165,35 +147,9 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
     setLocale(locale === 'zh-CN' ? 'en' : 'zh-CN');
   };
 
-  const commandItems = [
-    { label: '仪表盘', keywords: ['dashboard', 'home', '首页', '仪表盘'], path: '/' },
-    { label: '活动日志', keywords: ['log', 'logs', '日志', '活动日志'], path: '/logs' },
-    { label: '通道配置 - QQ个人号', keywords: ['qq', 'napcat', 'qq个人号', 'qq personal'], path: '/channels?channel=qq' },
-    { label: '通道配置 - 飞书', keywords: ['feishu', 'lark', '飞书'], path: '/channels?channel=feishu' },
-    { label: '通道配置 - QQ官方机器人', keywords: ['qqbot', 'qq官方', 'qq 官方机器人'], path: '/channels?channel=qqbot' },
-    { label: '技能中心', keywords: ['skills', 'skill', '技能'], path: '/skills' },
-    { label: '插件中心', keywords: ['plugins', 'plugin', '插件'], path: '/plugins' },
-    ...(enableAgents ? [{ label: locale === 'zh-CN' ? '智能体' : 'Agents', keywords: ['agent', 'agents', '智能体'], path: '/agents' }] : []),
-    { label: locale === 'zh-CN' ? '工作流中心' : 'Workflow Center', keywords: ['workflow', 'workflows', '流程', '工作流'], path: '/workflows' },
-    { label: '定时任务', keywords: ['cron', 'jobs', '定时任务'], path: '/cron' },
-    { label: '会话管理', keywords: ['session', 'sessions', '会话'], path: '/sessions' },
-    { label: '工作区', keywords: ['workspace', '工作区', '文件'], path: '/workspace' },
-    { label: '系统配置', keywords: ['config', 'settings', '系统配置'], path: '/config' },
-  ];
-
-  const searchResults = searchQuery.trim()
-    ? commandItems.filter(item => {
-        const q = searchQuery.toLowerCase();
-        return item.label.toLowerCase().includes(q) || item.keywords.some(k => k.toLowerCase().includes(q));
-      }).slice(0, 8)
-    : commandItems.slice(0, 6);
-
-  const handleSearchGo = (path: string) => {
+  const goTo = (path: string) => {
     navigate(path);
-    setSearchQuery('');
-    setSearchOpen(false);
     setOpen(false);
-    setProfileOpen(false);
   };
 
   // Build channel list from enabledChannels returned by /api/status
@@ -276,6 +232,10 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
 
         {/* Footer */}
         <div className="space-y-0.5 border-t border-slate-200/70 p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:pb-2">
+          <button onClick={toggleDark} className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 w-full">
+            {dark ? <Sun size={16} /> : <Moon size={16} />}{locale === 'zh-CN' ? (dark ? '切换到浅色' : '切换到深色') : (dark ? 'Light Mode' : 'Dark Mode')}
+          </button>
+          <MessageCenter tasks={tasks} taskLogs={taskLogs} onRefresh={loadTasks} mode="sidebar" />
           <button onClick={toggleLocale} className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 w-full">
             <Languages size={16} />{locale === 'zh-CN' ? 'English' : '中文（简体）'}
           </button>
@@ -333,86 +293,6 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
         </div>
       </aside>
       <main className="flex-1 flex flex-col overflow-hidden bg-transparent">
-          <header className="relative z-[160] hidden lg:flex items-center justify-between px-6 py-4 border-b border-slate-200/70 dark:border-slate-800/70 bg-[rgba(255,255,255,0.58)] dark:bg-[rgba(8,18,33,0.82)] backdrop-blur-xl">
-            <div className="flex items-center gap-3 min-w-0">
-              <button onClick={() => setOpen(true)} className="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-slate-200 bg-white/90 text-slate-500 hover:text-slate-700 hover:bg-white transition-colors lg:hidden">
-                <Menu size={18} />
-              </button>
-              <div ref={searchRef} className="relative z-[120] hidden xl:flex flex-col min-w-[360px] max-w-[520px]">
-                <div className="flex items-center gap-3 px-4 py-3 rounded-2xl ui-modern-panel">
-                <Search size={16} className="text-slate-400 dark:text-slate-500" />
-                <input value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }} onFocus={() => setSearchOpen(true)} onKeyDown={(e) => { if (e.key === 'Enter' && searchResults[0]) handleSearchGo(searchResults[0].path); if (e.key === 'Escape') setSearchOpen(false); }} placeholder={locale === 'zh-CN' ? '搜索页面、功能或通道...' : 'Search pages, features, or channels...'} className="w-full bg-transparent outline-none text-sm text-slate-700 dark:text-slate-100 placeholder:text-slate-500 dark:placeholder:text-slate-500" />
-                </div>
-                {searchOpen && (
-                  <div className="absolute top-full left-0 right-0 mt-3 rounded-[24px] border border-blue-100/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(239,246,255,0.92))] shadow-[0_24px_60px_rgba(15,23,42,0.14)] backdrop-blur-xl overflow-hidden z-[140] dark:border-blue-800/30 dark:bg-[linear-gradient(145deg,rgba(12,24,42,0.98),rgba(30,64,175,0.16))]">
-                    {searchResults.length === 0 ? <div className="px-4 py-3 text-sm text-slate-500 dark:text-slate-300">未找到匹配页面</div> : searchResults.map(item => (
-                      <button key={item.path + item.label} onClick={() => handleSearchGo(item.path)} className="w-full text-left px-4 py-3 hover:bg-blue-50/70 dark:hover:bg-blue-900/20 transition-colors border-b last:border-b-0 border-blue-100/60 dark:border-slate-700/70">
-                        <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{item.label}</div>
-                        <div className="text-[11px] text-slate-500 dark:text-slate-400">{item.path}</div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <button onClick={toggleDark} className="w-10 h-10 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-300 hover:text-slate-700 dark:hover:text-white transition-colors inline-flex items-center justify-center">
-                {dark ? <Sun size={17} /> : <Moon size={17} />}
-              </button>
-              <MessageCenter tasks={tasks} taskLogs={taskLogs} onRefresh={loadTasks} mode="icon" />
-              <div ref={profileRef} className="relative">
-                <button onClick={() => setProfileOpen(v => !v)} className="flex items-center gap-3 rounded-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 pl-2 pr-3 py-1.5 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">
-                  <img src="/logo.jpg" alt="avatar" className="w-8 h-8 rounded-full object-cover" />
-                    <div className="text-right leading-tight">
-                      <div className="text-xs font-semibold text-slate-800 dark:text-slate-100">Admin</div>
-                      <div className="text-[10px] text-slate-400 dark:text-slate-500">ClawPanel</div>
-                    </div>
-                  <ChevronDown size={14} className="text-slate-400" />
-                </button>
-                {profileOpen && (
-                  <div className="absolute top-full right-0 mt-2 w-44 rounded-2xl ui-modern-card p-2 z-50">
-                    <button onClick={() => { setProfileOpen(false); onLogout(); }} className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm text-red-600 hover:bg-red-50 transition-colors">
-                      <LogOut size={15} /> 退出登录
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </header>
-        <header className="lg:hidden shrink-0 border-b border-blue-100/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(239,246,255,0.74))] px-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 backdrop-blur-2xl dark:border-blue-400/15 dark:bg-[linear-gradient(180deg,rgba(7,17,31,0.94),rgba(11,26,46,0.88))]">
-          <div className="flex items-center gap-2.5">
-            <button onClick={() => setOpen(true)} className="page-modern-action h-11 w-11 rounded-2xl p-0">
-              <Menu size={19} />
-            </button>
-            <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-2xl border border-blue-100/70 bg-white/60 px-3 py-2.5 shadow-[0_14px_30px_rgba(15,23,42,0.05)] backdrop-blur-xl dark:border-blue-400/15 dark:bg-slate-900/50">
-              <img src="/logo.jpg" alt="ClawPanel" className="h-9 w-9 rounded-xl object-cover shadow-sm" />
-              <div className="min-w-0">
-                <div className="truncate text-sm font-bold tracking-tight text-slate-900 dark:text-white">ClawPanel</div>
-                <div className="truncate text-[11px] text-slate-500 dark:text-slate-400">{locale === 'zh-CN' ? '移动端控制台' : 'Mobile Console'}</div>
-              </div>
-            </div>
-            <button onClick={toggleDark} className="page-modern-action h-11 w-11 rounded-2xl p-0">
-              {dark ? <Sun size={17} /> : <Moon size={17} />}
-            </button>
-            <MessageCenter tasks={tasks} taskLogs={taskLogs} onRefresh={loadTasks} mode="icon" />
-          </div>
-          <div ref={searchRef} className="relative mt-3">
-            <div className="flex items-center gap-3 rounded-2xl border border-blue-100/70 bg-white/64 px-4 py-3 shadow-[0_14px_32px_rgba(15,23,42,0.05)] backdrop-blur-xl dark:border-blue-400/15 dark:bg-slate-900/48">
-              <Search size={16} className="text-slate-400 dark:text-slate-500" />
-              <input value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }} onFocus={() => setSearchOpen(true)} onKeyDown={(e) => { if (e.key === 'Enter' && searchResults[0]) handleSearchGo(searchResults[0].path); if (e.key === 'Escape') setSearchOpen(false); }} placeholder={locale === 'zh-CN' ? '搜索页面、功能或通道...' : 'Search pages, features, or channels...'} className="w-full bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-500 dark:text-slate-100 dark:placeholder:text-slate-500" />
-            </div>
-            {searchOpen && (
-              <div className="absolute left-0 right-0 top-full z-[140] mt-3 overflow-hidden rounded-[24px] border border-blue-100/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(239,246,255,0.92))] shadow-[0_24px_60px_rgba(15,23,42,0.14)] backdrop-blur-xl dark:border-blue-800/30 dark:bg-[linear-gradient(145deg,rgba(12,24,42,0.98),rgba(30,64,175,0.16))]">
-                {searchResults.length === 0 ? <div className="px-4 py-3 text-sm text-slate-500 dark:text-slate-300">未找到匹配页面</div> : searchResults.map(item => (
-                  <button key={item.path + item.label} onClick={() => handleSearchGo(item.path)} className="w-full border-b border-blue-100/60 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-blue-50/70 dark:border-slate-700/70 dark:hover:bg-blue-900/20">
-                    <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{item.label}</div>
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400">{item.path}</div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </header>
         {openclawStatus?.configured && !runtime.healthy && (
           <div className="px-3 pt-3 sm:px-4 lg:px-6 xl:px-7">
             <div className={`rounded-[24px] border px-4 py-3 shadow-[0_16px_34px_rgba(15,23,42,0.06)] backdrop-blur-xl ${runtime.state === 'offline' ? 'border-red-200/80 dark:border-red-900/40 bg-[linear-gradient(135deg,rgba(254,242,242,0.96),rgba(255,237,213,0.88))] dark:bg-[linear-gradient(135deg,rgba(127,29,29,0.24),rgba(120,53,15,0.18))]' : 'border-amber-200/80 dark:border-amber-900/40 bg-[linear-gradient(135deg,rgba(255,251,235,0.96),rgba(254,249,195,0.86))] dark:bg-[linear-gradient(135deg,rgba(120,53,15,0.22),rgba(113,63,18,0.16))]'}`}>
@@ -428,14 +308,16 @@ export default function Layout({ onLogout, napcatStatus, wechatStatus, openclawS
             </div>
           </div>
         )}
-        <div className="flex-1 overflow-y-auto ui-modern-scrollbar p-3 pb-24 sm:p-4 sm:pb-28 lg:p-6 lg:pb-6 xl:p-7"><Outlet context={{ uiMode: 'modern' }} /></div>
+        <div className={`${isTownPage ? 'flex-1 min-h-0 overflow-hidden' : 'flex-1 overflow-y-auto ui-modern-scrollbar'} p-3 pb-24 sm:p-4 sm:pb-28 lg:p-6 lg:pb-6 xl:p-7`}>
+          <Outlet context={{ uiMode: 'modern' }} />
+        </div>
       </main>
       <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-blue-100/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.9),rgba(239,246,255,0.84))] px-3 pb-[max(0.6rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur-2xl dark:border-blue-400/15 dark:bg-[linear-gradient(180deg,rgba(7,17,31,0.96),rgba(11,26,46,0.92))] lg:hidden">
-        <div className="grid grid-cols-5 gap-2">
+        <div className="grid grid-cols-6 gap-2">
           {mobileNavItems.map(({ to, icon: Icon, label }) => {
             const active = location.pathname === to || (to !== '/' && location.pathname.startsWith(to));
             return (
-              <button key={to} onClick={() => handleSearchGo(to)} className={`flex min-h-[62px] flex-col items-center justify-center gap-1 rounded-2xl border text-[11px] font-medium transition-all ${active ? 'border-blue-200/80 bg-[linear-gradient(135deg,rgba(59,130,246,0.18),rgba(14,165,233,0.12))] text-blue-700 shadow-[0_12px_24px_rgba(37,99,235,0.12)] dark:border-blue-400/20 dark:bg-[linear-gradient(135deg,rgba(37,99,235,0.24),rgba(14,165,233,0.12))] dark:text-blue-100' : 'border-transparent bg-white/40 text-slate-500 dark:bg-slate-900/28 dark:text-slate-400'}`}>
+              <button key={to} onClick={() => goTo(to)} className={`flex min-h-[62px] flex-col items-center justify-center gap-1 rounded-2xl border text-[11px] font-medium transition-all ${active ? 'border-blue-200/80 bg-[linear-gradient(135deg,rgba(59,130,246,0.18),rgba(14,165,233,0.12))] text-blue-700 shadow-[0_12px_24px_rgba(37,99,235,0.12)] dark:border-blue-400/20 dark:bg-[linear-gradient(135deg,rgba(37,99,235,0.24),rgba(14,165,233,0.12))] dark:text-blue-100' : 'border-transparent bg-white/40 text-slate-500 dark:bg-slate-900/28 dark:text-slate-400'}`}>
                 <Icon size={17} />
                 <span className="truncate px-1">{label}</span>
               </button>

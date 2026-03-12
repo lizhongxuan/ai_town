@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite --port 5173",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "tsc -p tsconfig.town-tests.json && printf '{\"type\":\"commonjs\"}\\n' > .test-dist/package.json && node .test-dist/town/tests/runTownTests.js",
+    "bench:town-replay": "tsc -p tsconfig.town-tests.json && printf '{\"type\":\"commonjs\"}\\n' > .test-dist/package.json && node .test-dist/town/tests/benchmarkTownReplay.js",
+    "bench:town-replay:check": "TOWN_REPLAY_BUILD_P95_MAX_MS=0.5 TOWN_REPLAY_SWEEP_P95_MAX_MS=1 tsc -p tsconfig.town-tests.json && printf '{\"type\":\"commonjs\"}\\n' > .test-dist/package.json && node .test-dist/town/tests/benchmarkTownReplay.js"
   },
   "dependencies": {
     "clsx": "^2.1.1",

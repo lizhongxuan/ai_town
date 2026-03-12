@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "outDir": ".test-dist",
+    "rootDir": "src",
+    "noEmit": false,
+    "declaration": false,
+    "allowImportingTsExtensions": false,
+    "isolatedModules": false
+  },
+  "include": [
+    "src/town/tests/**/*.ts",
+    "src/town/state/**/*.ts",
+    "src/town/mock/**/*.ts",
+    "src/town/scene/officeSceneModel.ts",
+    "src/town/types/**/*.ts"
+  ],
+  "exclude": ["src/town/**/*.test.ts", "src/town/**/*.spec.ts"]
+}

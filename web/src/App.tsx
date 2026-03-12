@@ -16,6 +16,7 @@ import Workspace from './pages/Workspace';
 import Plugins from './pages/Plugins';
 import Agents from './pages/Agents';
 import Workflows from './pages/Workflows';
+import Town from './pages/Town';
 
 export default function App() {
   const enableAgents = import.meta.env.VITE_FEATURE_AGENTS !== 'false';
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="/sessions" element={<OpenClawRequired openclawStatus={ws.openclawStatus} processStatus={ws.processStatus}><Sessions /></OpenClawRequired>} />
         <Route path="/config" element={<SystemConfig />} />
         <Route path="/workspace" element={<Workspace />} />
+        <Route path="/town" element={<Town />} />
       </Route>
       <Route path="/login" element={<Navigate to="/" />} />
       {/* Legacy redirects */}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useOutletContext } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Plus, RefreshCw, Save, Trash2, ArrowUp, ArrowDown, Route, Bot, Settings, Brain, Shield, ChevronDown, ChevronRight, Sparkles, FileText } from 'lucide-react';
@@ -1879,6 +1880,31 @@ export default function Agents() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form]);
+
+  useEffect(() => {
+    if (!showForm) return;
+
+    const prevOverflow = document.body.style.overflow;
+    const prevPaddingRight = document.body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+
+    document.body.style.overflow = 'hidden';
+    if (scrollbarWidth > 0) {
+      document.body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeForm();
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = prevOverflow;
+      document.body.style.paddingRight = prevPaddingRight;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showForm]);
 
   useEffect(() => {
     if (!selectedAgent) return;
@@ -4054,13 +4080,20 @@ export default function Agents() {
         </div>
       )}
 
-      {showForm && (
-        <div className="fixed inset-0 z-[220] bg-black/40 flex items-center justify-center p-4">
-          <div className={`w-full max-w-5xl max-h-[92vh] overflow-hidden rounded-xl border shadow-xl flex flex-col ${modern ? 'bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(239,246,255,0.92))] dark:bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(12,74,110,0.24))] border-sky-200/60 dark:border-sky-900/40 backdrop-blur-xl' : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700'}`}>
+      {showForm && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[220] overflow-y-auto bg-slate-950/52 p-4 backdrop-blur-md sm:p-6" onClick={closeForm}>
+          <div className="mx-auto flex min-h-full w-full max-w-5xl items-start justify-center sm:items-center">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="agent-form-title"
+              onClick={e => e.stopPropagation()}
+              className={`isolate w-full max-h-[92vh] overflow-hidden rounded-[28px] border shadow-[0_30px_90px_rgba(15,23,42,0.28)] flex flex-col ${modern ? 'bg-[linear-gradient(180deg,rgba(255,255,255,0.99),rgba(248,250,252,0.97))] dark:bg-[linear-gradient(180deg,rgba(2,6,23,0.98),rgba(15,23,42,0.97))] border-sky-200/70 dark:border-sky-800/30' : 'bg-white dark:bg-gray-800 border-gray-100 dark:border-gray-700'}`}
+            >
             <div className={`sticky top-0 z-10 border-b backdrop-blur ${modern ? 'border-sky-200/60 dark:border-sky-900/40 bg-white/80 dark:bg-slate-900/75' : 'border-gray-100 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95'}`}>
               <div className="px-5 py-4 flex items-start justify-between gap-4">
                 <div>
-                  <h3 className="font-semibold text-gray-900 dark:text-white">{editingId ? `编辑智能体（Edit Agent）: ${editingId}` : '新建智能体（New Agent）'}</h3>
+                  <h3 id="agent-form-title" className="font-semibold text-gray-900 dark:text-white">{editingId ? `编辑智能体（Edit Agent）: ${editingId}` : '新建智能体（New Agent）'}</h3>
                   <p className="text-xs text-gray-500 mt-1">
                     先完成基础信息（Basic），再按需进入其它部分。高级 JSON（Advanced）会保留完整覆盖能力。
                   </p>
@@ -4101,7 +4134,7 @@ export default function Agents() {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-5 py-5">
+            <div className="flex-1 overflow-y-auto bg-white/78 px-5 py-5 dark:bg-slate-950/72">
               {formSection === 'basic' && (
                 <div className="space-y-5">
                   {implicitMainOnly && (
@@ -4913,7 +4946,9 @@ export default function Agents() {
               </div>
             </div>
           </div>
-        </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

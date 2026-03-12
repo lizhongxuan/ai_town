@@ -364,6 +364,13 @@ func runServer(stopCh chan struct{}) {
 			auth.GET("/sessions/:id", handler.GetSessionDetail(cfg))
 			auth.DELETE("/sessions/:id", handler.DeleteSession(cfg))
 
+			// Town 观测层
+			auth.GET("/town/snapshot", handler.GetTownSnapshot(cfg, db, wsHub))
+			auth.PUT("/town/office-members", handler.UpdateTownOfficeMembers(cfg))
+			auth.POST("/town/runs", handler.CreateTownRun(cfg, db, wsHub))
+			auth.GET("/town/runs/:id/logs", handler.GetTownRunLogs(cfg, db))
+			auth.POST("/town/agents/:id/reset", handler.ResetTownAgent(cfg, db, wsHub))
+
 			// 配置检测 & 修复
 			auth.GET("/openclaw/config/check", handler.CheckConfig(cfg))
 			auth.POST("/openclaw/config/fix", handler.FixConfig(cfg))

@@ -198,6 +198,15 @@ const _api = {
   getSessions: (agent?: string) => get(`/sessions${agent ? '?agent=' + agent : ''}`),
   getSessionDetail: (id: string, agent?: string) => get(`/sessions/${id}${agent ? '?agent=' + agent : ''}`),
   deleteSession: (id: string, agent?: string) => del(`/sessions/${id}${agent ? '?agent=' + agent : ''}`),
+  // Town
+  getTownSnapshot: () => get('/town/snapshot'),
+  updateTownOfficeMembers: (data: { agentId?: string; membership?: string; members?: Array<{ agentId: string; membership: string }> }) =>
+    put('/town/office-members', data),
+  createTownRun: (data: { title?: string; prompt: string; source?: 'manual' | 'im'; selectedAgents?: string[] }) =>
+    post('/town/runs', data),
+  getTownRunLogs: (runId: string) => get(`/town/runs/${encodeURIComponent(runId)}/logs`),
+  resetTownAgent: (agentId: string, data?: { keepInOffice?: boolean }) =>
+    post(`/town/agents/${encodeURIComponent(agentId)}/reset`, data || {}),
   // Software & Tasks
   getSoftwareList: () => get('/software/list'),
   getOpenClawInstances: () => get('/software/openclaw-instances'),
