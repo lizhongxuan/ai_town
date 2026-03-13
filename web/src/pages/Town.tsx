@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ListFilter, ScrollText, Sparkles, Users } from 'lucide-react';
+import { ScrollText, Sparkles, Users } from 'lucide-react';
 import { api } from '../lib/api';
 import TownAgentDrawer from '../town/components/TownAgentDrawer';
+import TownAgentWorkModal from '../town/components/TownAgentWorkModal';
 import TownOfficeMembersModal from '../town/components/TownOfficeMembersModal';
 import TownTaskLogModal from '../town/components/TownTaskLogModal';
 import { buildTownStateFromMock } from '../town/state/townState';
@@ -13,14 +14,12 @@ import {
   getTownLatestRun,
   getTownOfficeAgents,
   getTownOfficeSkillSummary,
-  getTownOfficeZones,
   getTownRecentLogs,
   getTownRunningTaskCount,
   getTownSelectedAgents,
   getTownSelectedSkillSummary,
   getTownValidatedInstances,
   getTownVisibleAgents,
-  getTownZoneLoadMap,
 } from '../town/state/townSelectors';
 import { advanceTownAmbient, setTownScene, toggleTownAgentSelection } from '../town/state/townState';
 import {
@@ -30,7 +29,7 @@ import {
 } from '../town/state/townViewState';
 import MainTownScene from '../town/scene/MainTownScene';
 import OfficeScene from '../town/scene/OfficeScene';
-import { TownLogEntry, TownState } from '../town/types/town';
+import { TownLogEntry, TownRun, TownState } from '../town/types/town';
 
 const POSITION_STORAGE_KEY = 'town-position-overrides-v1';
 
@@ -38,6 +37,18 @@ type PositionOverride = {
   sceneId: 'mainTown' | 'office';
   x: number;
   y: number;
+};
+
+type WorkerInspectTarget = { kind: 'openclaw' } | { kind: 'agent'; agentId: string };
+
+type WorkModalState = {
+  open: boolean;
+  title: string;
+  subtitle: string;
+  runId: string;
+  runTitle: string;
+  logs: TownLogEntry[];
+  loading: boolean;
 };
 
 function loadPositionOverrides(): Record<string, PositionOverride> {
@@ -93,6 +104,44 @@ function buildAgentMap(state: TownState) {
   return Object.fromEntries(state.agents.map(agent => [agent.id, agent] as const));
 }
 
+function createEmptyWorkModalState(): WorkModalState {
+  return {
+    open: false,
+    title: '',
+    subtitle: '',
+    runId: '',
+    runTitle: '',
+    logs: [],
+    loading: false,
+  };
+}
+
+function mapRemoteTownLogs(runId: string, items: any[]): TownLogEntry[] {
+  return (Array.isArray(items) ? items : []).map((item: any, index: number) => ({
+    id: typeof item?.id === 'string' && item.id ? item.id : `run-log-${index + 1}`,
+    runId,
+    agentId: typeof item?.agentId === 'string' && item.agentId.trim() ? item.agentId.trim() : undefined,
+    title: typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : '日志更新',
+    detail: typeof item?.detail === 'string' && item.detail.trim() ? item.detail.trim() : '暂无详情',
+    timeLabel: typeof item?.timeLabel === 'string' && item.timeLabel.trim() ? item.timeLabel.trim() : '--:--',
+    time: Number.isFinite(item?.time) && Number(item.time) > 0 ? Number(item.time) : Date.now() - index * 1000,
+    type: item?.type === 'session' || item?.type === 'spawn' || item?.type === 'im' ? item.type : 'system',
+  })) as TownLogEntry[];
+}
+
+function compareRuns(left: TownRun, right: TownRun) {
+  const score = (run: TownRun) => {
+    if (run.status === 'running') return 2;
+    if (run.status === 'error') return 1;
+    return 0;
+  };
+  const byStatus = score(right) - score(left);
+  if (byStatus !== 0) return byStatus;
+  if (right.updatedAt !== left.updatedAt) return right.updatedAt - left.updatedAt;
+  if (right.createdAt !== left.createdAt) return right.createdAt - left.createdAt;
+  return right.id.localeCompare(left.id);
+}
+
 export default function Town() {
   const navigate = useNavigate();
   const [townState, setTownState] = useState(() => buildTownStateFromMock());
@@ -100,6 +149,7 @@ export default function Town() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [officeMembersModalOpen, setOfficeMembersModalOpen] = useState(false);
   const [logModalOpen, setLogModalOpen] = useState(false);
+  const [workModalState, setWorkModalState] = useState<WorkModalState>(createEmptyWorkModalState);
   const [searchQuery, setSearchQuery] = useState('');
   const [prompt, setPrompt] = useState('');
   const [pendingAgentIds, setPendingAgentIds] = useState<string[]>([]);
@@ -134,13 +184,12 @@ export default function Town() {
   const latestEvent = useMemo(() => getTownLatestEvent(townState), [townState]);
   const runningTasks = useMemo(() => getTownRunningTaskCount(townState), [townState]);
   const latestRun = useMemo(() => getTownLatestRun(townState), [townState]);
-  const zones = useMemo(() => getTownOfficeZones(townState), [townState]);
   const validatedInstances = useMemo(() => getTownValidatedInstances(townState), [townState]);
   const agentLoads = useMemo(() => getTownAgentLoadMap(townState), [townState]);
-  const zoneLoads = useMemo(() => getTownZoneLoadMap(townState), [townState]);
   const defaultModalLogs = useMemo(() => getTownRecentLogs(townState), [townState]);
   const filteredAgents = useMemo(() => filterAgents(townState, searchQuery), [townState, searchQuery]);
   const agentMap = useMemo(() => buildAgentMap(townState), [townState]);
+  const runMap = useMemo(() => new Map(townState.runs.map(run => [run.id, run] as const)), [townState.runs]);
 
   const displayMainTownAgents = useMemo(
     () =>
@@ -177,6 +226,15 @@ export default function Town() {
   useEffect(() => {
     replayActiveRef.current = replayMode.active;
   }, [replayMode.active]);
+
+  useEffect(() => {
+    if (!selectedDisplayAgentId) return;
+    const selectedAgent = townState.agents.find(agent => agent.id === selectedDisplayAgentId);
+    if (!selectedAgent) return;
+    if (selectedAgent.executionState !== 'busy' && selectedAgent.executionState !== 'error') {
+      setKeyboardMoveEnabled(true);
+    }
+  }, [selectedDisplayAgentId, townState.agents]);
 
   useEffect(() => {
     if (!keyboardMoveEnabled) return;
@@ -455,6 +513,10 @@ export default function Town() {
 
   const handleSelectDisplayAgent = (agentId: string) => {
     setSelectedDisplayAgentId(agentId);
+    const agent = townState.agents.find(item => item.id === agentId);
+    if (agent && agent.executionState !== 'busy' && agent.executionState !== 'error') {
+      setKeyboardMoveEnabled(true);
+    }
   };
 
   const handleStartRun = async () => {
@@ -536,16 +598,7 @@ export default function Town() {
         if (!response?.ok) {
           throw new Error(response?.error || '任务日志加载失败');
         }
-        const mappedLogs = (Array.isArray(response.logs) ? response.logs : []).map((item: any, index: number) => ({
-          id: typeof item?.id === 'string' && item.id ? item.id : `run-log-${index + 1}`,
-          runId: normalizedRunId,
-          agentId: typeof item?.agentId === 'string' && item.agentId.trim() ? item.agentId.trim() : undefined,
-          title: typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : '日志更新',
-          detail: typeof item?.detail === 'string' && item.detail.trim() ? item.detail.trim() : '暂无详情',
-          timeLabel: typeof item?.timeLabel === 'string' && item.timeLabel.trim() ? item.timeLabel.trim() : '--:--',
-          time: Number.isFinite(item?.time) && Number(item.time) > 0 ? Number(item.time) : Date.now() - index * 1000,
-          type: item?.type === 'session' || item?.type === 'spawn' || item?.type === 'im' ? item.type : 'system',
-        })) as TownLogEntry[];
+        const mappedLogs = mapRemoteTownLogs(normalizedRunId, response.logs);
 
         setSelectedRunId(normalizedRunId);
         setRunLogs(mappedLogs);
@@ -560,6 +613,100 @@ export default function Town() {
       }
     },
     [snapshotMode, townState]
+  );
+
+  const pickWorkerLogs = useCallback(
+    (logs: TownLogEntry[], target: WorkerInspectTarget) => {
+      if (target.kind === 'openclaw') {
+        const managerLogs = logs.filter(log => !log.agentId || log.agentId === townState.boss.id);
+        return managerLogs.length > 0 ? managerLogs : logs;
+      }
+
+      const directLogs = logs.filter(log => !log.agentId || log.agentId === target.agentId);
+      return directLogs.some(log => log.agentId === target.agentId) ? directLogs : logs;
+    },
+    [townState.boss.id]
+  );
+
+  const findWorkerRun = useCallback(
+    (target: WorkerInspectTarget) => {
+      const candidates = new Map<string, TownRun>();
+      const pushCandidate = (run?: TownRun) => {
+        if (run) {
+          candidates.set(run.id, run);
+        }
+      };
+
+      if (target.kind === 'openclaw') {
+        pushCandidate(townState.runs.find(run => run.status === 'running'));
+        pushCandidate(latestRun);
+      } else {
+        const agent = agentMap[target.agentId];
+        if (agent?.currentRunId) {
+          pushCandidate(runMap.get(agent.currentRunId));
+        }
+        validatedInstances
+          .filter(instance => instance.agentId === target.agentId)
+          .forEach(instance => pushCandidate(runMap.get(instance.runId)));
+        townState.runs
+          .filter(run => run.participantAgentIds.includes(target.agentId))
+          .forEach(run => pushCandidate(run));
+      }
+
+      return Array.from(candidates.values()).sort(compareRuns)[0];
+    },
+    [agentMap, latestRun, runMap, townState.runs, validatedInstances]
+  );
+
+  const handleInspectWorker = useCallback(
+    async (target: WorkerInspectTarget) => {
+      const run = findWorkerRun(target);
+      const workerName = target.kind === 'openclaw' ? 'OpenClaw(main)' : agentMap[target.agentId]?.name || target.agentId;
+      const subtitle =
+        target.kind === 'openclaw'
+          ? '主控当前正在办公室工位处理任务。这里展示本次运行里的对话和工作日志。'
+          : `${workerName} 当前正在工位前处理任务。这里展示它与 AI 的交互记录和自身日志。`;
+      const localLogs = pickWorkerLogs(run?.id ? getTownRecentLogs(townState, run.id) : defaultModalLogs, target);
+
+      setWorkModalState({
+        open: true,
+        title: workerName,
+        subtitle,
+        runId: run?.id || '',
+        runTitle: run?.title || '',
+        logs: localLogs,
+        loading: snapshotMode !== 'fallback' && Boolean(run?.id),
+      });
+
+      if (snapshotMode === 'fallback' || !run?.id) {
+        return;
+      }
+
+      try {
+        const response = await api.getTownRunLogs(run.id);
+        if (!response?.ok) {
+          throw new Error(response?.error || '工作日志加载失败');
+        }
+        const mappedLogs = mapRemoteTownLogs(run.id, response.logs);
+        const filteredLogs = pickWorkerLogs(mappedLogs, target);
+        setWorkModalState(current => ({
+          ...current,
+          logs: filteredLogs.length > 0 ? filteredLogs : localLogs,
+          loading: false,
+        }));
+        dispatchView({ type: 'clearSyncMessage' });
+      } catch (error) {
+        dispatchView({
+          type: 'setSyncMessage',
+          message: parseErrorMessage(error),
+        });
+        setWorkModalState(current => ({
+          ...current,
+          loading: false,
+        }));
+      }
+    },
+    [agentMap, defaultModalLogs, findWorkerRun, pickWorkerLogs, snapshotMode, townState]
   );
 
   const openLatestRunLogs = async () => {
@@ -783,9 +930,9 @@ export default function Town() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-hidden">
-        <div className="flex h-full min-h-0 flex-col gap-3 xl:flex-row">
+        <div className="flex h-full min-h-0 flex-col gap-3 lg:flex-row">
           <div className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-[520px] flex-1 xl:min-h-0">
+            <div className="min-h-[440px] flex-1 sm:min-h-[520px] lg:min-h-0">
               {townState.activeSceneId === 'mainTown' ? (
                 <MainTownScene
                   scene={townState.scenes.mainTown}
@@ -804,19 +951,16 @@ export default function Town() {
                   scene={townState.scenes.office}
                   agents={displayOfficeAgents}
                   runs={townState.runs}
-                  instances={validatedInstances}
-                  zones={zones}
-                  zoneLoads={zoneLoads}
-                  agentLoads={agentLoads}
                   selectedDisplayAgentId={selectedDisplayAgentId}
                   runningTasks={runningTasks}
                   onSelectDisplayAgent={handleSelectDisplayAgent}
+                  onInspectWorker={target => void handleInspectWorker(target)}
                 />
               )}
             </div>
           </div>
 
-          <div className="flex h-[360px] min-h-0 flex-col gap-3 overflow-y-auto pr-1 xl:h-full xl:w-[360px] xl:overflow-visible xl:pr-0">
+          <div className="flex h-[360px] min-h-0 flex-col gap-3 overflow-y-auto pr-1 lg:h-full lg:w-[360px] lg:pr-0">
             {townState.activeSceneId === 'mainTown' ? (
               <>
                 <div className="relative border-[4px] border-[#2d1c0d] bg-[#f7efc7] p-5 shadow-[0_8px_0_#2d1c0d]">
@@ -897,48 +1041,6 @@ export default function Town() {
               <>
                 <div className="relative border-[4px] border-[#2d1c0d] bg-[#f7efc7] p-5 shadow-[0_8px_0_#2d1c0d]">
                   <div className="pointer-events-none absolute inset-[8px] border-[2px] border-[#c89d49] opacity-60" />
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2 text-sm font-black text-stone-900">
-                      <Users size={16} className="text-amber-700" />
-                      办公室成员
-                    </div>
-                    <div className="border-[3px] border-[#2d1c0d] bg-[#fff4cc] px-2 py-1 text-[11px] font-bold text-stone-900">
-                      {officeAgents.length}
-                    </div>
-                  </div>
-                  <div className="relative mt-4 text-sm leading-6 text-stone-600">
-                    成员列表改为弹框查看。你可以在弹框里看成员状态、分身负载，并移出非忙碌成员。
-                  </div>
-                  <button
-                    onClick={() => setOfficeMembersModalOpen(true)}
-                    className="relative mt-4 flex w-full items-center justify-center gap-2 border-[4px] border-[#2d1c0d] bg-[#fffaf0] px-4 py-3 text-sm font-black text-stone-900 shadow-[0_6px_0_#2d1c0d]"
-                  >
-                    <Users size={16} />
-                    查看办公室成员列表
-                  </button>
-                </div>
-
-                <div className="relative border-[4px] border-[#2d1c0d] bg-[#f7efc7] p-5 shadow-[0_8px_0_#2d1c0d]">
-                  <div className="pointer-events-none absolute inset-[8px] border-[2px] border-[#c89d49] opacity-60" />
-                  <div className="flex items-center gap-2 text-sm font-black text-stone-900">
-                    <Sparkles size={16} className="text-amber-700" />
-                    办公室技能汇总
-                  </div>
-                  <div className="relative mt-4 flex flex-wrap gap-2">
-                    {officeSkillSummary.length > 0 ? (
-                      officeSkillSummary.map(skill => (
-                        <span key={skill.id} className="border-[2px] border-[#c89d49] bg-[#fffaf0] px-2.5 py-1 text-xs font-medium text-stone-700">
-                          {skill.name}
-                        </span>
-                      ))
-                    ) : (
-                      <div className="text-sm leading-6 text-stone-600">当前没有办公室成员的技能汇总，OpenClaw 主控会按需单独执行。</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="relative border-[4px] border-[#2d1c0d] bg-[#f7efc7] p-5 shadow-[0_8px_0_#2d1c0d]">
-                  <div className="pointer-events-none absolute inset-[8px] border-[2px] border-[#c89d49] opacity-60" />
                   <div className="flex items-center gap-2 text-sm font-black text-stone-900">
                     <Sparkles size={16} className="text-amber-700" />
                     发起任务
@@ -975,6 +1077,48 @@ export default function Town() {
                     {snapshotMode === 'fallback'
                       ? `当前为演示模式。运行中任务：${runningTasks}。`
                       : `当前有 ${runningTasks} 个运行中任务；没有选中协作成员也可以单独执行。`}
+                  </div>
+                </div>
+
+                <div className="relative border-[4px] border-[#2d1c0d] bg-[#f7efc7] p-5 shadow-[0_8px_0_#2d1c0d]">
+                  <div className="pointer-events-none absolute inset-[8px] border-[2px] border-[#c89d49] opacity-60" />
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-sm font-black text-stone-900">
+                      <Users size={16} className="text-amber-700" />
+                      办公室成员
+                    </div>
+                    <div className="border-[3px] border-[#2d1c0d] bg-[#fff4cc] px-2 py-1 text-[11px] font-bold text-stone-900">
+                      {officeAgents.length}
+                    </div>
+                  </div>
+                  <div className="relative mt-4 text-sm leading-6 text-stone-600">
+                    成员列表改为弹框查看。你可以在弹框里查看成员状态、当前负载，并移出非忙碌成员。
+                  </div>
+                  <button
+                    onClick={() => setOfficeMembersModalOpen(true)}
+                    className="relative mt-4 flex w-full items-center justify-center gap-2 border-[4px] border-[#2d1c0d] bg-[#fffaf0] px-4 py-3 text-sm font-black text-stone-900 shadow-[0_6px_0_#2d1c0d]"
+                  >
+                    <Users size={16} />
+                    查看办公室成员列表
+                  </button>
+                </div>
+
+                <div className="relative border-[4px] border-[#2d1c0d] bg-[#f7efc7] p-5 shadow-[0_8px_0_#2d1c0d]">
+                  <div className="pointer-events-none absolute inset-[8px] border-[2px] border-[#c89d49] opacity-60" />
+                  <div className="flex items-center gap-2 text-sm font-black text-stone-900">
+                    <Sparkles size={16} className="text-amber-700" />
+                    办公室技能汇总
+                  </div>
+                  <div className="relative mt-4 flex flex-wrap gap-2">
+                    {officeSkillSummary.length > 0 ? (
+                      officeSkillSummary.map(skill => (
+                        <span key={skill.id} className="border-[2px] border-[#c89d49] bg-[#fffaf0] px-2.5 py-1 text-xs font-medium text-stone-700">
+                          {skill.name}
+                        </span>
+                      ))
+                    ) : (
+                      <div className="text-sm leading-6 text-stone-600">当前没有办公室成员的技能汇总，OpenClaw 主控会按需单独执行。</div>
+                    )}
                   </div>
                 </div>
               </>
@@ -1030,6 +1174,17 @@ export default function Town() {
         interactionLocked={replayMode.active}
         onToggleAgent={agentId => void handleToggleAgent(agentId)}
         onClose={() => setOfficeMembersModalOpen(false)}
+      />
+
+      <TownAgentWorkModal
+        open={workModalState.open}
+        title={workModalState.title}
+        subtitle={workModalState.subtitle}
+        runId={workModalState.runId}
+        runTitle={workModalState.runTitle}
+        logs={workModalState.logs}
+        loading={workModalState.loading}
+        onClose={() => setWorkModalState(createEmptyWorkModalState())}
       />
     </div>
   );

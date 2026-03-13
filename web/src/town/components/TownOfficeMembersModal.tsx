@@ -63,7 +63,7 @@ export default function TownOfficeMembersModal({
                 return (
                   <div key={agent.id} className="border-[4px] border-[#2d1c0d] bg-[#fffdf2] p-4">
                     <div className={`inline-flex border-[2px] px-2 py-0.5 text-[10px] font-black ${loadVisual.badgeClassName}`}>
-                      分身负载：{load}（{loadVisual.summaryLabel}）
+                      当前负载：{load}（{loadVisual.summaryLabel}）
                     </div>
                     <div className="mt-3 flex items-center justify-between gap-3">
                       <div className="min-w-0">
