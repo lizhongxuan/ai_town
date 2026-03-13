@@ -69,6 +69,11 @@ export interface TownBoss {
   title: string;
   location: TownSceneId;
   summary: string;
+  mainTownPosition: TownPosition;
+  officePosition: TownPosition;
+  officeDeskPosition: TownPosition;
+  mainTownFacing: TownFacing;
+  officeFacing: TownFacing;
 }
 
 export interface TownBuilding {

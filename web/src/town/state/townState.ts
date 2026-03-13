@@ -119,6 +119,19 @@ function clampPosition(position: TownPosition, sceneId: TownSceneId, state: Town
   };
 }
 
+function clampBossPosition(position: TownPosition, sceneId: TownSceneId): TownPosition {
+  if (sceneId === 'mainTown') {
+    return {
+      x: Math.max(7, Math.min(12, position.x)),
+      y: Math.max(3, Math.min(7, position.y)),
+    };
+  }
+  return {
+    x: Math.max(6, Math.min(10, position.x)),
+    y: Math.max(4, Math.min(7, position.y)),
+  };
+}
+
 function countManualSelection(state: TownState) {
   return state.agents.filter(agent => agent.officeMembership === 'selected').length;
 }
@@ -256,6 +269,8 @@ export function startTownRun(
 ): TownState {
   const next = cloneState(state);
   next.activeSceneId = 'office';
+  next.boss.officePosition = { ...next.boss.officeDeskPosition };
+  next.boss.officeFacing = 'up';
   const now = Date.now();
 
   input.autoAgentIds?.forEach(agentId => {
@@ -395,6 +410,15 @@ export function completeTownRun(state: TownState, runId: string): TownState {
     agent.speech = '这一轮处理完了，继续待命。';
   });
 
+  next.boss.officePosition = clampBossPosition(
+    {
+      x: next.boss.officeDeskPosition.x + (Math.random() > 0.5 ? 1 : -1),
+      y: next.boss.officeDeskPosition.y + 2,
+    },
+    'office'
+  );
+  next.boss.officeFacing = randomFrom<TownFacing>(['left', 'right', 'down']);
+
   pushTownEvent(next, 'success', '办公室任务已完成', `主任务「${run.title}」已完成，相关成员留在办公室继续待命。`, 'office');
   pushTownLog(next, '任务已完成', `主任务「${run.title}」已结束，办公室成员已回到待命状态。`, 'session', { runId });
   return next;
@@ -403,6 +427,7 @@ export function completeTownRun(state: TownState, runId: string): TownState {
 export function advanceTownAmbient(state: TownState): TownState {
   const next = cloneState(state);
   next.clock = addMinutes(next.clock, 5);
+  const openclawBusy = next.runs.some(run => run.status === 'running');
 
   next.agents.forEach(agent => {
     if (agent.location === 'mainTown' && agent.officeMembership === 'unselected') {
@@ -438,6 +463,39 @@ export function advanceTownAmbient(state: TownState): TownState {
       }
     }
   });
+
+  {
+    const mainDeltaX = [-1, 0, 1][Math.floor(Math.random() * 3)];
+    const mainDeltaY = [-1, 0, 1][Math.floor(Math.random() * 3)];
+    next.boss.mainTownPosition = clampBossPosition(
+      {
+        x: next.boss.mainTownPosition.x + mainDeltaX,
+        y: next.boss.mainTownPosition.y + mainDeltaY,
+      },
+      'mainTown'
+    );
+    if (mainDeltaX !== 0 || mainDeltaY !== 0) {
+      next.boss.mainTownFacing = facingFromDelta(mainDeltaX, mainDeltaY);
+    }
+  }
+
+  if (openclawBusy) {
+    next.boss.officePosition = { ...next.boss.officeDeskPosition };
+    next.boss.officeFacing = 'up';
+  } else {
+    const officeDeltaX = [-1, 0, 1][Math.floor(Math.random() * 3)];
+    const officeDeltaY = [-1, 0, 1][Math.floor(Math.random() * 3)];
+    next.boss.officePosition = clampBossPosition(
+      {
+        x: next.boss.officePosition.x + officeDeltaX,
+        y: next.boss.officePosition.y + officeDeltaY,
+      },
+      'office'
+    );
+    if (officeDeltaX !== 0 || officeDeltaY !== 0) {
+      next.boss.officeFacing = facingFromDelta(officeDeltaX, officeDeltaY);
+    }
+  }
 
   next.ambientResidents.forEach(resident => {
     const deltaX = [-1, 0, 1][Math.floor(Math.random() * 3)];

@@ -1,0 +1,69 @@
+{
+  "version": 4,
+  "officeMembers": {
+    "researcher": "selected"
+  },
+  "runs": [
+    {
+      "id": "run-1773372418200",
+      "title": "你好",
+      "prompt": "你好",
+      "source": "manual",
+      "status": "completed",
+      "primarySessionId": "session-http-check",
+      "createdAt": 1773372418200,
+      "updatedAt": 1773372418568
+    }
+  ],
+  "logs": [
+    {
+      "id": "log-completed-1773372418568",
+      "runId": "run-1773372418200",
+      "title": "任务已完成",
+      "detail": "收到，主任务由 OpenClaw(main) 完成。",
+      "time": 1773372418568,
+      "type": "session"
+    },
+    {
+      "id": "log-1773372418200-researcher",
+      "runId": "run-1773372418200",
+      "agentId": "researcher",
+      "title": "researcher 在办公室待命",
+      "detail": "researcher 已在办公室待命，等待 OpenClaw(main) 按需调度。",
+      "time": 1773372418200,
+      "type": "session"
+    },
+    {
+      "id": "log-1773372418200",
+      "runId": "run-1773372418200",
+      "title": "主任务会话已创建",
+      "detail": "OpenClaw(main) 已为「你好」创建主任务会话。",
+      "time": 1773372418200,
+      "type": "session"
+    }
+  ],
+  "events": [
+    {
+      "id": "event-completed-1773372418568",
+      "type": "success",
+      "title": "办公室任务已完成",
+      "detail": "主任务「你好」已完成。",
+      "time": 1773372418568,
+      "runId": "run-1773372418200",
+      "sceneHint": "office"
+    },
+    {
+      "id": "event-1773372418200",
+      "type": "success",
+      "title": "OpenClaw(main) 已发起协作任务",
+      "detail": "researcher 已在办公室待命，OpenClaw(main) 会按需拉入协作。",
+      "time": 1773372418200,
+      "runId": "run-1773372418200",
+      "sceneHint": "office"
+    }
+  ],
+  "recentWeights": {
+    "researcher": 2
+  },
+  "updatedAt": 1773372418568
+}

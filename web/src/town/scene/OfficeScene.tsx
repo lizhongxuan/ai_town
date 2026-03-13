@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import TownHUD from '../components/TownHUD';
 import TownScene from './TownScene';
-import { TownAgent, TownRun, TownSceneDef } from '../types/town';
+import { TownAgent, TownBoss, TownFacing, TownRun, TownSceneDef } from '../types/town';
 
 const WINDOW_PANES = [
   { id: 'window-1', left: '16%', top: '8%' },
@@ -29,6 +29,7 @@ const SPRITE_THEME: Record<string, { hair: string; outfit: string; accent: strin
 
 interface Props {
   scene: TownSceneDef;
+  boss: TownBoss;
   agents: TownAgent[];
   runs: TownRun[];
   selectedDisplayAgentId?: string;
@@ -115,8 +116,38 @@ function WorkerPlate({ label, action }: { label: string; action: string }) {
   );
 }
 
+function PixelBossSprite({ busy, facing, working }: { busy?: boolean; facing: TownFacing; working?: boolean }) {
+  const highlight = busy ? 'border-[#fde68a]' : 'border-transparent';
+  const singleEyeOffset =
+    facing === 'left' ? 'left-[15px]' : facing === 'right' ? 'right-[15px]' : 'left-[14px]';
+  return (
+    <div className="relative h-[68px] w-[52px] [image-rendering:pixelated]">
+      <div className="absolute left-[12px] top-0 h-[10px] w-[28px] border-[2px] border-[#2d1c0d] bg-[#1d4ed8]" />
+      <div className="absolute left-[10px] top-[10px] h-[20px] w-[32px] border-[2px] border-[#2d1c0d] bg-[#f6d6ad]" />
+      {working ? null : facing === 'left' || facing === 'right' ? (
+        <div className={`absolute top-[16px] h-[4px] w-[4px] bg-[#2d1c0d] ${singleEyeOffset}`} />
+      ) : (
+        <>
+          <div className="absolute left-[14px] top-[16px] h-[4px] w-[4px] bg-[#2d1c0d]" />
+          <div className="absolute right-[14px] top-[16px] h-[4px] w-[4px] bg-[#2d1c0d]" />
+        </>
+      )}
+      <div className="absolute left-[8px] top-[30px] h-[22px] w-[36px] border-[2px] border-[#2d1c0d] bg-[#2563eb]" />
+      <div className="absolute left-[3px] top-[32px] h-[8px] w-[7px] border-[2px] border-[#2d1c0d] bg-[#dbeafe]" />
+      <div className="absolute right-[3px] top-[32px] h-[8px] w-[7px] border-[2px] border-[#2d1c0d] bg-[#dbeafe]" />
+      <div className="absolute left-[12px] top-[52px] h-[12px] w-[8px] border-[2px] border-[#2d1c0d] bg-[#5b3a28]" />
+      <div className="absolute right-[12px] top-[52px] h-[12px] w-[8px] border-[2px] border-[#2d1c0d] bg-[#5b3a28]" />
+      <div className="absolute -right-1 -top-1 border-[2px] border-[#2d1c0d] bg-[#fff4cc] px-1 text-[9px] font-black text-[#1d4ed8]">
+        AI
+      </div>
+      <div className={`absolute inset-0 border-[3px] ${highlight}`} />
+    </div>
+  );
+}
+
 export default function OfficeScene({
   scene,
+  boss,
   agents,
   runs,
   selectedDisplayAgentId,
@@ -150,6 +181,9 @@ export default function OfficeScene({
     const deskIds = visibleBusyAgents.map((_, index) => WORK_DESKS[index]?.id).filter((id): id is string => Boolean(id));
     return new Set(deskIds);
   }, [visibleBusyAgents]);
+  const openclawBusy = useMemo(() => runs.some(run => run.status === 'running'), [runs]);
+  const bossPosition = openclawBusy ? boss.officeDeskPosition : boss.officePosition;
+  const bossFacing = openclawBusy ? 'up' : boss.officeFacing;
 
   return (
     <TownScene
@@ -176,10 +210,30 @@ export default function OfficeScene({
         <div className="absolute inset-x-0 top-[26%] z-[1] h-[3%] bg-[#8e6137]" />
         <div className="absolute left-[6%] top-[30%] z-[2] h-[6%] w-[12%] border-[3px] border-[#2d1c0d] bg-[#8d5d37]" />
         <div className="absolute right-[6%] top-[30%] z-[2] h-[6%] w-[12%] border-[3px] border-[#2d1c0d] bg-[#8d5d37]" />
+        <div className="absolute left-1/2 top-[37%] z-[4] h-[6%] w-[18%] -translate-x-1/2 border-[3px] border-[#2d1c0d] bg-[#8d5d37]" />
 
         {WORK_DESKS.map(desk => (
           <WorkDesk key={desk.id} x={desk.x} y={desk.y} active={activeDeskIds.has(desk.id)} />
         ))}
+
+        <div
+          className="absolute z-20 flex -translate-x-1/2 -translate-y-[60%] flex-col items-center"
+          style={{ left: `${(bossPosition.x / scene.width) * 100}%`, top: `${(bossPosition.y / scene.height) * 100}%` }}
+        >
+          <button
+            type="button"
+            onClick={() => onInspectWorker?.({ kind: 'openclaw' })}
+            className="flex h-[86px] w-[86px] items-center justify-center"
+          >
+            <PixelBossSprite busy={openclawBusy} facing={bossFacing} working={openclawBusy} />
+          </button>
+          <button
+            type="button"
+            onClick={() => onInspectWorker?.({ kind: 'openclaw' })}
+          >
+            <WorkerPlate label={boss.name} action="查看" />
+          </button>
+        </div>
 
         {visibleBusyAgents.map((agent, index) => {
           const desk = WORK_DESKS[index];
@@ -240,7 +294,7 @@ export default function OfficeScene({
 
         {agents.length === 0 ? (
           <div className="absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2 border-[4px] border-[#2d1c0d] bg-[#fff4cc] px-6 py-5 text-center shadow-[0_8px_0_#2d1c0d]">
-            <div className="text-lg font-black text-stone-900">办公室暂时没人</div>
+            <div className="text-lg font-black text-stone-900">办公室里当前只有主控</div>
             <div className="mt-2 text-sm leading-6 text-stone-600">你可以从主镇把 Agent 带进来，也可以让 OpenClaw(main) 先独自开始处理任务。</div>
           </div>
         ) : null}

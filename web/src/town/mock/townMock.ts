@@ -22,6 +22,11 @@ const BOSS: TownBoss = {
   title: '总控 / 主任务发起者',
   location: 'office',
   summary: '所有任务都由 OpenClaw 发起或接管。AI 小镇只是把它的会话与协作过程可视化。',
+  mainTownPosition: { x: 10, y: 4 },
+  officePosition: { x: 8, y: 6 },
+  officeDeskPosition: { x: 8, y: 4 },
+  mainTownFacing: 'down',
+  officeFacing: 'down',
 };
 
 const AGENTS: TownAgent[] = [

@@ -1,0 +1,11 @@
+{
+  "port": 19529,
+  "dataDir": "/Users/zhongxuanli/Desktop/ai_town/runtime/town-http-check-data",
+  "openClawDir": "/Users/zhongxuanli/Desktop/ai_town/runtime/town-http-check-openclaw",
+  "openClawApp": "/Users/zhongxuanli/Desktop/ai_town/runtime/app",
+  "openClawWork": "/Users/zhongxuanli/Desktop/ai_town/runtime/town-http-check-work",
+  "jwtSecret": "clawpanel-secret-change-me",
+  "adminToken": "clawpanel",
+  "debug": false,
+  "townV3Enabled": true
+}

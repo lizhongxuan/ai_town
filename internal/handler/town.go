@@ -36,11 +36,11 @@ const (
 )
 
 var (
-	townStateMu              sync.Mutex
-	errTownVersionConflict   = errors.New("town office members version conflict")
-	errTownEmptyPatch        = errors.New("town office members patch is empty")
-	errTownManagerLocked     = errors.New("town manager membership is locked")
-	errTownSelectedLimit     = errors.New("town selected limit exceeded")
+	townStateMu            sync.Mutex
+	errTownVersionConflict = errors.New("town office members version conflict")
+	errTownEmptyPatch      = errors.New("town office members patch is empty")
+	errTownManagerLocked   = errors.New("town manager membership is locked")
+	errTownSelectedLimit   = errors.New("town selected limit exceeded")
 )
 
 func GetTownSnapshot(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc {
@@ -183,7 +183,7 @@ func CreateTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc 
 		runID := fmt.Sprintf("run-%d", time.Now().UnixMilli())
 		managerID := loadDefaultAgentID(cfg)
 		_, agentSet := loadAgentIDs(cfg)
-		participants := uniqueTownAgents(req.SelectedAgents, agentSet, managerID)
+		standbyAgents := uniqueTownAgents(req.SelectedAgents, agentSet, managerID)
 
 		now := time.Now()
 		run := townSharedRun{
@@ -195,58 +195,25 @@ func CreateTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc 
 			PrimarySessionID:    fmt.Sprintf("session-%s", runID),
 			CreatedAt:           now.UnixMilli(),
 			UpdatedAt:           now.UnixMilli(),
-			ParticipantAgentIDs: append([]string(nil), participants...),
-			SpawnedSessions:     make([]townSharedSpawnedSession, 0, len(participants)),
-		}
-		for _, agentID := range participants {
-			run.SpawnedSessions = append(run.SpawnedSessions, townSharedSpawnedSession{
-				ID:      fmt.Sprintf("spawn-%s-%s", runID, agentID),
-				AgentID: agentID,
-				Status:  "running",
-			})
+			ParticipantAgentIDs: []string{},
+			SpawnedSessions:     []townSharedSpawnedSession{},
 		}
 
 		_, err := updateTownSharedState(cfg, nil, func(state *townSharedState) error {
-			if len(participants) == 0 {
-				for agentID, membership := range state.OfficeMembers {
-					if membership == "selected" || membership == "auto_added" {
-						participants = append(participants, agentID)
-					}
-				}
-				sort.Strings(participants)
-				run.ParticipantAgentIDs = append([]string(nil), participants...)
-				run.SpawnedSessions = run.SpawnedSessions[:0]
-				for _, agentID := range participants {
-					run.SpawnedSessions = append(run.SpawnedSessions, townSharedSpawnedSession{
-						ID:      fmt.Sprintf("spawn-%s-%s", runID, agentID),
-						AgentID: agentID,
-						Status:  "running",
-					})
-				}
-			}
-
 			if source == "im" {
-				for _, agentID := range participants {
+				for _, agentID := range standbyAgents {
 					applyTownAutoAdded(state.OfficeMembers, agentID)
 				}
 			}
-			for _, agentID := range participants {
+			for _, agentID := range standbyAgents {
 				state.RecentWeights[agentID] = maxTownInt(state.RecentWeights[agentID]+2, 2)
-				state.Instances = prependTownInstance(state.Instances, townSharedInstance{
-					ID:        fmt.Sprintf("instance-%s-%s", runID, agentID),
-					AgentID:   agentID,
-					RunID:     runID,
-					SessionID: fmt.Sprintf("spawn-%s-%s", runID, agentID),
-					ZoneID:    fmt.Sprintf("zone-%s", runID),
-					Status:    "executing",
-				})
 			}
 			state.Runs = prependTownRun(state.Runs, run)
 			appendTownStateEvent(state, townSharedEvent{
 				ID:        fmt.Sprintf("event-%d", now.UnixMilli()),
 				Type:      sourceEventType(source),
 				Title:     sourceEventTitle(source),
-				Detail:    participantDetail(participants),
+				Detail:    participantDetail(standbyAgents),
 				Time:      now.UnixMilli(),
 				RunID:     runID,
 				SceneHint: "office",
@@ -259,13 +226,13 @@ func CreateTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc 
 				Time:   now.UnixMilli(),
 				Type:   sourceLogType(source),
 			})
-			for _, agentID := range participants {
+			for _, agentID := range standbyAgents {
 				appendTownStateLog(state, townSharedLog{
 					ID:      fmt.Sprintf("log-%d-%s", now.UnixMilli(), agentID),
 					RunID:   runID,
 					AgentID: agentID,
-					Title:   fmt.Sprintf("%s 已被拉入协作", agentID),
-					Detail:  fmt.Sprintf("OpenClaw(main) 已把 %s 拉入「%s」。", agentID, run.Title),
+					Title:   fmt.Sprintf("%s 在办公室待命", agentID),
+					Detail:  fmt.Sprintf("%s 已在办公室待命，等待 OpenClaw(main) 按需调度。", agentID),
 					Time:    now.UnixMilli(),
 					Type:    sourceLogType(source),
 				})
@@ -282,45 +249,36 @@ func CreateTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc 
 			"source": source,
 			"title":  run.Title,
 		})
-		if len(participants) == 0 {
+		if len(standbyAgents) == 0 {
 			recordTownRuntimeEvent(db, hub, "openclaw.run.single", "本轮由 OpenClaw(main) 单独执行", map[string]string{
 				"runId": runID,
 			})
 		}
-		for _, agentID := range participants {
+		for _, agentID := range standbyAgents {
 			if source == "im" {
 				recordTownRuntimeEvent(db, hub, "openclaw.agent.auto_added", fmt.Sprintf("%s 自动加入办公室成员池", agentID), map[string]string{
 					"runId":   runID,
 					"agentId": agentID,
 				})
 			}
-			recordTownRuntimeEvent(db, hub, "openclaw.session.spawned", fmt.Sprintf("%s 已被拉入协作", agentID), map[string]string{
-				"runId":     runID,
-				"agentId":   agentID,
-				"sessionId": fmt.Sprintf("spawn-%s-%s", runID, agentID),
-			})
-			recordTownRuntimeEvent(db, hub, "openclaw.agent.busy", fmt.Sprintf("%s 进入忙碌状态", agentID), map[string]string{
-				"runId":   runID,
-				"agentId": agentID,
-			})
 		}
 
 		go finalizeTownRun(cfg, db, hub, townBridgeRequest{
-			RunID:          runID,
-			Title:          run.Title,
-			Prompt:         prompt,
-			Source:         source,
-			ManagerAgentID: managerID,
-			SelectedAgents: participants,
+			RunID:           runID,
+			Title:           run.Title,
+			Prompt:          prompt,
+			Source:          source,
+			ManagerAgentID:  managerID,
+			StandbyAgentIDs: standbyAgents,
 		})
 
 		c.JSON(http.StatusOK, gin.H{
 			"ok": true,
 			"run": gin.H{
-				"id":                 run.ID,
-				"title":              run.Title,
-				"status":             run.Status,
-				"primarySessionId":   run.PrimarySessionID,
+				"id":                  run.ID,
+				"title":               run.Title,
+				"status":              run.Status,
+				"primarySessionId":    run.PrimarySessionID,
 				"participantAgentIds": run.ParticipantAgentIDs,
 			},
 		})
@@ -835,15 +793,15 @@ func buildTownVisibleAgentIDs(agents []TownSnapshotAgent) []string {
 }
 
 func deriveTownExecutionState(membership string, run townSharedRun, instance townSharedInstance) string {
-	if normalizeTownInstanceStatus(instance.Status) == "error" || normalizeTownRunStatus(run.Status) == "error" {
-		if run.ID != "" {
-			return "error"
-		}
+	hasRun := strings.TrimSpace(run.ID) != ""
+	hasInstance := strings.TrimSpace(instance.ID) != "" || strings.TrimSpace(instance.RunID) != "" || strings.TrimSpace(instance.AgentID) != ""
+	if hasInstance && hasRun && (normalizeTownInstanceStatus(instance.Status) == "error" || normalizeTownRunStatus(run.Status) == "error") {
+		return "error"
 	}
-	if normalizeTownRunStatus(run.Status) == "running" {
+	if hasInstance && hasRun && normalizeTownRunStatus(run.Status) == "running" {
 		return "busy"
 	}
-	if membership != "unselected" && normalizeTownInstanceStatus(instance.Status) == "completed" {
+	if hasInstance && membership != "unselected" && normalizeTownInstanceStatus(instance.Status) == "completed" {
 		return "completed"
 	}
 	if membership != "unselected" {
@@ -1074,9 +1032,9 @@ func uniqueTownAgents(input []string, agentSet map[string]struct{}, managerID st
 
 func participantDetail(agentIDs []string) string {
 	if len(agentIDs) == 0 {
-		return "当前任务将由 OpenClaw(main) 单独执行。"
+		return "当前任务先由 OpenClaw(main) 发起；如有需要会再拉入其他 Agent。"
 	}
-	return fmt.Sprintf("%s 已被拉入当前任务。", strings.Join(agentIDs, "、"))
+	return fmt.Sprintf("%s 已在办公室待命，OpenClaw(main) 会按需拉入协作。", strings.Join(agentIDs, "、"))
 }
 
 func sourceEventType(source string) string {
@@ -1159,6 +1117,12 @@ func finalizeTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub, req townBridge
 			if state.Runs[runIndex].ID != req.RunID {
 				continue
 			}
+			participantAgentIDs := townBridgeParticipantAgentIDs(result)
+			if len(participantAgentIDs) > 0 {
+				state.Runs[runIndex].ParticipantAgentIDs = append([]string(nil), participantAgentIDs...)
+				state.Runs[runIndex].SpawnedSessions = normalizeTownBridgeSpawnedSessions(req.RunID, result.SpawnedSessions, participantAgentIDs)
+				state.Instances = ensureTownRunInstances(state.Instances, req.RunID, state.Runs[runIndex].SpawnedSessions, "completed")
+			}
 			state.Runs[runIndex].Status = "completed"
 			state.Runs[runIndex].UpdatedAt = now.UnixMilli()
 			if strings.TrimSpace(result.SessionID) != "" {
@@ -1198,7 +1162,7 @@ func finalizeTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub, req townBridge
 		"runId":  req.RunID,
 		"source": req.Source,
 	})
-	for _, agentID := range req.SelectedAgents {
+	for _, agentID := range townBridgeParticipantAgentIDs(result) {
 		recordTownRuntimeEvent(db, hub, "openclaw.agent.idle", fmt.Sprintf("%s 已恢复待命", agentID), map[string]string{
 			"runId":   req.RunID,
 			"agentId": agentID,
@@ -1220,7 +1184,8 @@ func dispatchTownRunBridgeHTTP(ctx context.Context, bridgeURL string, req townBr
 		"prompt":         req.Prompt,
 		"source":         req.Source,
 		"managerAgentId": req.ManagerAgentID,
-		"selectedAgents": req.SelectedAgents,
+		"selectedAgents": []string{},
+		"standbyAgents":  req.StandbyAgentIDs,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -1245,12 +1210,12 @@ func dispatchTownRunBridgeHTTP(ctx context.Context, bridgeURL string, req townBr
 		return townBridgeResult{}, fmt.Errorf("Town 桥接 OpenClaw 失败: bridge HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(bodyRaw)))
 	}
 
-	var parsed townBridgeResult
+	parsed, payload := decodeTownBridgeResult(bodyRaw)
 	if len(bodyRaw) == 0 {
 		return parsed, nil
 	}
-	if err := json.Unmarshal(bodyRaw, &parsed); err != nil {
-		parsed.Output = strings.TrimSpace(string(bodyRaw))
+	if payloadErr := townBridgePayloadError(payload); payloadErr != nil {
+		return townBridgeResult{}, fmt.Errorf("Town 桥接 OpenClaw 失败: %s", payloadErr.Error())
 	}
 	return parsed, nil
 }
@@ -1267,22 +1232,299 @@ func dispatchTownRunBridgeLocal(ctx context.Context, cfg *config.Config, req tow
 	)
 	output, err := command.CombinedOutput()
 	trimmed := strings.TrimSpace(string(output))
+	parsed, payload := decodeTownBridgeResult(output)
+	if payloadErr := townBridgePayloadError(payload); payloadErr != nil {
+		return townBridgeResult{}, fmt.Errorf("Town 桥接 OpenClaw 失败: %s", payloadErr.Error())
+	}
 	if err != nil {
+		if townBridgePayloadLooksSuccessful(payload, parsed) {
+			return parsed, nil
+		}
 		if trimmed == "" {
 			trimmed = err.Error()
 		}
 		return townBridgeResult{}, fmt.Errorf("Town 桥接 OpenClaw 失败: %s", trimmed)
 	}
+	return parsed, nil
+}
+
+func decodeTownBridgeResult(raw []byte) (townBridgeResult, map[string]any) {
+	trimmed := strings.TrimSpace(string(raw))
 	result := townBridgeResult{Output: trimmed}
+	if len(raw) == 0 {
+		return result, nil
+	}
 	var payload map[string]any
-	if json.Unmarshal(output, &payload) == nil {
-		if sessionID := strings.TrimSpace(toString(payload["sessionId"])); sessionID != "" {
-			result.SessionID = sessionID
-		} else if sessionID := strings.TrimSpace(toString(payload["id"])); sessionID != "" {
-			result.SessionID = sessionID
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return result, nil
+	}
+	result.Output = extractTownBridgeOutput(payload, trimmed)
+	result.SessionID = extractTownBridgeSessionID(payload)
+	result.ParticipantAgentIDs = extractTownBridgeParticipantAgentIDs(payload)
+	result.SpawnedSessions = extractTownBridgeSpawnedSessions(payload)
+	return result, payload
+}
+
+func townBridgePayloadError(payload map[string]any) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	status := strings.ToLower(strings.TrimSpace(toString(payload["status"])))
+	message := strings.TrimSpace(toString(payload["error"]))
+	if message == "" {
+		message = strings.TrimSpace(toString(payload["message"]))
+	}
+	if okValue, exists := payload["ok"]; exists {
+		if ok, matched := okValue.(bool); matched && !ok {
+			if message == "" {
+				message = "bridge returned ok=false"
+			}
+			return errors.New(message)
 		}
 	}
-	return result, nil
+	if status == "error" || status == "failed" {
+		if message == "" {
+			message = "bridge returned failure status"
+		}
+		return errors.New(message)
+	}
+	if message != "" && status == "" {
+		return errors.New(message)
+	}
+	return nil
+}
+
+func townBridgePayloadLooksSuccessful(payload map[string]any, result townBridgeResult) bool {
+	if len(payload) == 0 {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(toString(payload["status"])))
+	if status == "ok" || status == "completed" || status == "success" {
+		return true
+	}
+	if okValue, exists := payload["ok"]; exists {
+		if ok, matched := okValue.(bool); matched {
+			return ok
+		}
+	}
+	return result.SessionID != "" || result.Output != ""
+}
+
+func extractTownBridgeOutput(payload map[string]any, fallback string) string {
+	for _, source := range []map[string]any{payload, asMap(payload["result"])} {
+		if len(source) == 0 {
+			continue
+		}
+		if output := strings.TrimSpace(toString(source["output"])); output != "" {
+			return output
+		}
+		if text := strings.TrimSpace(toString(source["text"])); text != "" {
+			return text
+		}
+		if texts := extractTownBridgePayloadTexts(source["payloads"]); len(texts) > 0 {
+			return strings.Join(texts, "\n\n")
+		}
+	}
+	return fallback
+}
+
+func extractTownBridgeSessionID(payload map[string]any) string {
+	for _, source := range []map[string]any{
+		payload,
+		asMap(payload["result"]),
+		asMap(asMap(payload["meta"])["agentMeta"]),
+		asMap(asMap(asMap(payload["result"])["meta"])["agentMeta"]),
+	} {
+		if len(source) == 0 {
+			continue
+		}
+		if sessionID := strings.TrimSpace(toString(source["sessionId"])); sessionID != "" {
+			return sessionID
+		}
+		if sessionID := strings.TrimSpace(toString(source["id"])); sessionID != "" {
+			return sessionID
+		}
+	}
+	return ""
+}
+
+func extractTownBridgeParticipantAgentIDs(payload map[string]any) []string {
+	for _, source := range []map[string]any{payload, asMap(payload["result"])} {
+		if len(source) == 0 {
+			continue
+		}
+		for _, key := range []string{"participantAgentIds", "participants"} {
+			if ids := uniqueTownStringSlice(source[key]); len(ids) > 0 {
+				return ids
+			}
+		}
+	}
+	return nil
+}
+
+func extractTownBridgeSpawnedSessions(payload map[string]any) []townSharedSpawnedSession {
+	for _, source := range []map[string]any{payload, asMap(payload["result"])} {
+		if len(source) == 0 {
+			continue
+		}
+		rawSessions, ok := source["spawnedSessions"].([]any)
+		if !ok {
+			continue
+		}
+		result := make([]townSharedSpawnedSession, 0, len(rawSessions))
+		for _, rawSession := range rawSessions {
+			session := asMap(rawSession)
+			agentID := strings.TrimSpace(toString(session["agentId"]))
+			if agentID == "" {
+				continue
+			}
+			result = append(result, townSharedSpawnedSession{
+				ID:      strings.TrimSpace(toString(session["id"])),
+				AgentID: agentID,
+				Status:  normalizeTownRunStatus(toString(session["status"])),
+			})
+		}
+		if len(result) > 0 {
+			return result
+		}
+	}
+	return nil
+}
+
+func extractTownBridgePayloadTexts(raw any) []string {
+	payloads, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	texts := make([]string, 0, len(payloads))
+	for _, item := range payloads {
+		payload := asMap(item)
+		text := strings.TrimSpace(toString(payload["text"]))
+		if text == "" {
+			continue
+		}
+		texts = append(texts, text)
+	}
+	return texts
+}
+
+func townBridgeParticipantAgentIDs(result townBridgeResult) []string {
+	ids := append([]string(nil), result.ParticipantAgentIDs...)
+	for _, session := range result.SpawnedSessions {
+		ids = append(ids, session.AgentID)
+	}
+	return uniqueTownStringSlice(ids)
+}
+
+func normalizeTownBridgeSpawnedSessions(runID string, sessions []townSharedSpawnedSession, participantAgentIDs []string) []townSharedSpawnedSession {
+	if len(sessions) == 0 {
+		return buildTownDefaultSpawnedSessions(runID, participantAgentIDs, "completed")
+	}
+	result := make([]townSharedSpawnedSession, 0, len(sessions))
+	seen := map[string]struct{}{}
+	for _, session := range sessions {
+		agentID := strings.TrimSpace(session.AgentID)
+		if agentID == "" {
+			continue
+		}
+		if _, exists := seen[agentID]; exists {
+			continue
+		}
+		seen[agentID] = struct{}{}
+		sessionID := strings.TrimSpace(session.ID)
+		if sessionID == "" {
+			sessionID = fmt.Sprintf("spawn-%s-%s", runID, agentID)
+		}
+		result = append(result, townSharedSpawnedSession{
+			ID:      sessionID,
+			AgentID: agentID,
+			Status:  normalizeTownRunStatus(session.Status),
+		})
+	}
+	for _, agentID := range participantAgentIDs {
+		if _, exists := seen[agentID]; exists {
+			continue
+		}
+		result = append(result, townSharedSpawnedSession{
+			ID:      fmt.Sprintf("spawn-%s-%s", runID, agentID),
+			AgentID: agentID,
+			Status:  "completed",
+		})
+	}
+	return result
+}
+
+func buildTownDefaultSpawnedSessions(runID string, participantAgentIDs []string, status string) []townSharedSpawnedSession {
+	result := make([]townSharedSpawnedSession, 0, len(participantAgentIDs))
+	for _, agentID := range participantAgentIDs {
+		result = append(result, townSharedSpawnedSession{
+			ID:      fmt.Sprintf("spawn-%s-%s", runID, agentID),
+			AgentID: agentID,
+			Status:  normalizeTownRunStatus(status),
+		})
+	}
+	return result
+}
+
+func ensureTownRunInstances(instances []townSharedInstance, runID string, sessions []townSharedSpawnedSession, status string) []townSharedInstance {
+	for _, session := range sessions {
+		found := false
+		for index := range instances {
+			if instances[index].RunID != runID || instances[index].AgentID != session.AgentID {
+				continue
+			}
+			instances[index].SessionID = session.ID
+			instances[index].ZoneID = fmt.Sprintf("zone-%s", runID)
+			instances[index].Status = normalizeTownInstanceStatus(status)
+			found = true
+		}
+		if found {
+			continue
+		}
+		instances = prependTownInstance(instances, townSharedInstance{
+			ID:        fmt.Sprintf("instance-%s-%s", runID, session.AgentID),
+			AgentID:   session.AgentID,
+			RunID:     runID,
+			SessionID: session.ID,
+			ZoneID:    fmt.Sprintf("zone-%s", runID),
+			Status:    normalizeTownInstanceStatus(status),
+		})
+	}
+	return instances
+}
+
+func uniqueTownStringSlice(input any) []string {
+	seen := map[string]struct{}{}
+	rawItems := make([]string, 0)
+	switch typed := input.(type) {
+	case []string:
+		rawItems = append(rawItems, typed...)
+	case []any:
+		for _, item := range typed {
+			rawItems = append(rawItems, toString(item))
+		}
+	default:
+		return nil
+	}
+	result := make([]string, 0, len(rawItems))
+	for _, raw := range rawItems {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func asMap(raw any) map[string]any {
+	mapped, _ := raw.(map[string]any)
+	return mapped
 }
 
 func resolveTownOpenClawBinary() (string, error) {
@@ -1413,16 +1655,16 @@ func encodeTownEventDetail(fields map[string]string) string {
 
 func validateTownEventFields(eventType, detail string) error {
 	required := map[string][]string{
-		"openclaw.run.started":    {"runId", "source"},
-		"openclaw.run.completed":  {"runId", "source"},
-		"openclaw.run.failed":     {"runId", "source"},
-		"openclaw.run.single":     {"runId"},
-		"openclaw.session.spawned": {"runId", "agentId", "sessionId"},
-		"openclaw.agent.busy":     {"runId", "agentId"},
-		"openclaw.agent.idle":     {"runId", "agentId"},
+		"openclaw.run.started":      {"runId", "source"},
+		"openclaw.run.completed":    {"runId", "source"},
+		"openclaw.run.failed":       {"runId", "source"},
+		"openclaw.run.single":       {"runId"},
+		"openclaw.session.spawned":  {"runId", "agentId", "sessionId"},
+		"openclaw.agent.busy":       {"runId", "agentId"},
+		"openclaw.agent.idle":       {"runId", "agentId"},
 		"openclaw.agent.auto_added": {"runId", "agentId"},
-		"openclaw.agent.reset":    {"agentId"},
-		"openclaw.im.received":    {"runId", "source", "prompt"},
+		"openclaw.agent.reset":      {"agentId"},
+		"openclaw.im.received":      {"runId", "source", "prompt"},
 	}
 	need := required[eventType]
 	if len(need) == 0 {

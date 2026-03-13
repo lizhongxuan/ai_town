@@ -52,6 +52,11 @@ Request:
 }
 ```
 
+Notes:
+
+- `selectedAgents` 表示当前在办公室待命的成员，不表示这些 Agent 会被立即拉入执行。
+- 主任务始终先由 `OpenClaw(main)` 发起；只有真实桥接结果确认产生了子会话时，Town 才会把对应 Agent 标记为执行中/已完成。
+
 ### `GET /api/town/runs/:id/logs`
 
 Purpose:

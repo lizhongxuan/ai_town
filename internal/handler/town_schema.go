@@ -67,19 +67,19 @@ type TownSnapshotSpawnedSession struct {
 }
 
 type TownSnapshotRun struct {
-	ID                 string                      `json:"id,omitempty"`
-	Title              string                      `json:"title,omitempty"`
-	Prompt             string                      `json:"prompt,omitempty"`
-	Source             string                      `json:"source,omitempty"`
-	Status             string                      `json:"status,omitempty"`
-	PrimarySessionID   string                      `json:"primarySessionId,omitempty"`
-	CreatedAt          int64                       `json:"createdAt,omitempty"`
-	CreatedAtRfc3339   string                      `json:"createdAtRfc3339,omitempty"`
-	UpdatedAt          int64                       `json:"updatedAt,omitempty"`
-	UpdatedAtRfc3339   string                      `json:"updatedAtRfc3339,omitempty"`
-	CreatedAtLabel     string                      `json:"createdAtLabel,omitempty"`
-	UpdatedAtLabel     string                      `json:"updatedAtLabel,omitempty"`
-	ParticipantAgentID []string                    `json:"participantAgentIds,omitempty"`
+	ID                 string                       `json:"id,omitempty"`
+	Title              string                       `json:"title,omitempty"`
+	Prompt             string                       `json:"prompt,omitempty"`
+	Source             string                       `json:"source,omitempty"`
+	Status             string                       `json:"status,omitempty"`
+	PrimarySessionID   string                       `json:"primarySessionId,omitempty"`
+	CreatedAt          int64                        `json:"createdAt,omitempty"`
+	CreatedAtRfc3339   string                       `json:"createdAtRfc3339,omitempty"`
+	UpdatedAt          int64                        `json:"updatedAt,omitempty"`
+	UpdatedAtRfc3339   string                       `json:"updatedAtRfc3339,omitempty"`
+	CreatedAtLabel     string                       `json:"createdAtLabel,omitempty"`
+	UpdatedAtLabel     string                       `json:"updatedAtLabel,omitempty"`
+	ParticipantAgentID []string                     `json:"participantAgentIds,omitempty"`
 	SpawnedSessions    []TownSnapshotSpawnedSession `json:"spawnedSessions,omitempty"`
 }
 
@@ -93,26 +93,26 @@ type TownSnapshotInstance struct {
 }
 
 type TownSnapshot struct {
-	Clock              string                       `json:"clock,omitempty"`
-	Weather            string                       `json:"weather,omitempty"`
-	Version            int64                        `json:"version,omitempty"`
-	Sync               TownSnapshotSync             `json:"sync,omitempty"`
-	OpenClaw           TownSnapshotOpenClaw         `json:"openclaw,omitempty"`
-	MaxSelectableAgent int                          `json:"maxSelectableAgents,omitempty"`
-	OfficeMembers      map[string]string            `json:"officeMembers,omitempty"`
-	Agents             []TownSnapshotAgent          `json:"agents,omitempty"`
-	VisibleTownAgentID []string                     `json:"visibleTownAgentIds,omitempty"`
-	Events             []TownSnapshotEvent          `json:"events,omitempty"`
-	Logs               []TownSnapshotLog            `json:"logs,omitempty"`
-	Runs               []TownSnapshotRun            `json:"runs,omitempty"`
-	Instances          []TownSnapshotInstance       `json:"instances,omitempty"`
+	Clock              string                 `json:"clock,omitempty"`
+	Weather            string                 `json:"weather,omitempty"`
+	Version            int64                  `json:"version,omitempty"`
+	Sync               TownSnapshotSync       `json:"sync,omitempty"`
+	OpenClaw           TownSnapshotOpenClaw   `json:"openclaw,omitempty"`
+	MaxSelectableAgent int                    `json:"maxSelectableAgents,omitempty"`
+	OfficeMembers      map[string]string      `json:"officeMembers,omitempty"`
+	Agents             []TownSnapshotAgent    `json:"agents,omitempty"`
+	VisibleTownAgentID []string               `json:"visibleTownAgentIds,omitempty"`
+	Events             []TownSnapshotEvent    `json:"events,omitempty"`
+	Logs               []TownSnapshotLog      `json:"logs,omitempty"`
+	Runs               []TownSnapshotRun      `json:"runs,omitempty"`
+	Instances          []TownSnapshotInstance `json:"instances,omitempty"`
 }
 
 type townOfficeMembersRequest struct {
-	AgentID         string                   `json:"agentId"`
-	Membership      string                   `json:"membership"`
-	Members         []townOfficeMemberPatch  `json:"members"`
-	ExpectedVersion *int64                   `json:"expectedVersion"`
+	AgentID         string                  `json:"agentId"`
+	Membership      string                  `json:"membership"`
+	Members         []townOfficeMemberPatch `json:"members"`
+	ExpectedVersion *int64                  `json:"expectedVersion"`
 }
 
 type townOfficeMemberPatch struct {
@@ -132,14 +132,14 @@ type townResetAgentRequest struct {
 }
 
 type townSharedState struct {
-	Version       int64                  `json:"version"`
-	OfficeMembers map[string]string      `json:"officeMembers,omitempty"`
-	Runs          []townSharedRun        `json:"runs,omitempty"`
-	Logs          []townSharedLog        `json:"logs,omitempty"`
-	Events        []townSharedEvent      `json:"events,omitempty"`
-	Instances     []townSharedInstance   `json:"instances,omitempty"`
-	RecentWeights map[string]int         `json:"recentWeights,omitempty"`
-	UpdatedAt     int64                  `json:"updatedAt,omitempty"`
+	Version       int64                `json:"version"`
+	OfficeMembers map[string]string    `json:"officeMembers,omitempty"`
+	Runs          []townSharedRun      `json:"runs,omitempty"`
+	Logs          []townSharedLog      `json:"logs,omitempty"`
+	Events        []townSharedEvent    `json:"events,omitempty"`
+	Instances     []townSharedInstance `json:"instances,omitempty"`
+	RecentWeights map[string]int       `json:"recentWeights,omitempty"`
+	UpdatedAt     int64                `json:"updatedAt,omitempty"`
 }
 
 type townSharedRun struct {
@@ -192,15 +192,17 @@ type townSharedInstance struct {
 }
 
 type townBridgeRequest struct {
-	RunID          string
-	Title          string
-	Prompt         string
-	Source         string
-	ManagerAgentID string
-	SelectedAgents []string
+	RunID           string
+	Title           string
+	Prompt          string
+	Source          string
+	ManagerAgentID  string
+	StandbyAgentIDs []string
 }
 
 type townBridgeResult struct {
-	Output    string `json:"output,omitempty"`
-	SessionID string `json:"sessionId,omitempty"`
+	Output              string                     `json:"output,omitempty"`
+	SessionID           string                     `json:"sessionId,omitempty"`
+	ParticipantAgentIDs []string                   `json:"participantAgentIds,omitempty"`
+	SpawnedSessions     []townSharedSpawnedSession `json:"spawnedSessions,omitempty"`
 }

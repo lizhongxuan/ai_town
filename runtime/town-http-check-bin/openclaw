@@ -1,0 +1,3 @@
+#!/bin/sh
+printf '{"status":"ok","summary":"completed","result":{"payloads":[{"text":"收到，主任务由 OpenClaw(main) 完成。"}],"meta":{"agentMeta":{"sessionId":"session-http-check"}}}}\n'
+exit 1

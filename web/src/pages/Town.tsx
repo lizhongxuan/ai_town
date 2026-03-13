@@ -937,6 +937,7 @@ export default function Town() {
                 <MainTownScene
                   scene={townState.scenes.mainTown}
                   buildings={townState.buildings.filter(building => building.sceneId === 'mainTown')}
+                  boss={townState.boss}
                   agents={displayMainTownAgents}
                   ambientResidents={townState.ambientResidents}
                   selectedDisplayAgentId={selectedDisplayAgentId}
@@ -949,6 +950,7 @@ export default function Town() {
               ) : (
                 <OfficeScene
                   scene={townState.scenes.office}
+                  boss={townState.boss}
                   agents={displayOfficeAgents}
                   runs={townState.runs}
                   selectedDisplayAgentId={selectedDisplayAgentId}

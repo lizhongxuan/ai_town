@@ -65,6 +65,83 @@ func TestDispatchTownRunBridgeUsesLocalOpenClawFallback(t *testing.T) {
 	if result.SessionID != "session-test" {
 		t.Fatalf("expected session-test, got %q", result.SessionID)
 	}
+	if result.Output != "done" {
+		t.Fatalf("expected output done, got %q", result.Output)
+	}
+}
+
+func TestDispatchTownRunBridgeTreatsJSONSuccessAsSuccessEvenWithNonZeroExit(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fake := filepath.Join(binDir, "openclaw")
+	script := "#!/bin/sh\nprintf '{\"status\":\"ok\",\"summary\":\"completed\",\"result\":{\"payloads\":[{\"text\":\"hello\"}],\"meta\":{\"agentMeta\":{\"sessionId\":\"session-nested\"}}}}'\nexit 1\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake openclaw: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+
+	cfg := &config.Config{
+		OpenClawDir:  filepath.Join(root, "openclaw"),
+		OpenClawWork: filepath.Join(root, "workspaces", "main"),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := dispatchTownRunBridge(ctx, cfg, townBridgeRequest{
+		RunID:          "run-test",
+		Title:          "标题",
+		Prompt:         "只回复 OK",
+		Source:         "manual",
+		ManagerAgentID: "main",
+	})
+	if err != nil {
+		t.Fatalf("dispatchTownRunBridge returned error: %v", err)
+	}
+	if result.SessionID != "session-nested" {
+		t.Fatalf("expected session-nested, got %q", result.SessionID)
+	}
+	if result.Output != "hello" {
+		t.Fatalf("expected parsed output hello, got %q", result.Output)
+	}
+}
+
+func TestDispatchTownRunBridgeHTTPParsesNestedPayloadResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","summary":"completed","result":{"payloads":[{"text":"bridge hello"}],"meta":{"agentMeta":{"sessionId":"session-http"}}}}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("TOWN_RUN_BRIDGE_URL", server.URL)
+	cfg := &config.Config{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := dispatchTownRunBridge(ctx, cfg, townBridgeRequest{
+		RunID:           "run-http",
+		Title:           "标题",
+		Prompt:          "hello",
+		Source:          "manual",
+		ManagerAgentID:  "main",
+		StandbyAgentIDs: []string{"coder"},
+	})
+	if err != nil {
+		t.Fatalf("dispatchTownRunBridge returned error: %v", err)
+	}
+	if result.SessionID != "session-http" {
+		t.Fatalf("expected session-http, got %q", result.SessionID)
+	}
+	if result.Output != "bridge hello" {
+		t.Fatalf("expected parsed output bridge hello, got %q", result.Output)
+	}
 }
 
 func TestTownOfficeMembersVersionConflict(t *testing.T) {
@@ -133,6 +210,145 @@ func TestTownSnapshotRunLogsAndReset(t *testing.T) {
 	resetResponse := performTownRequest(router, http.MethodPost, "/api/town/agents/coder/reset", `{"keepInOffice":true}`)
 	if resetResponse.Code != http.StatusOK {
 		t.Fatalf("resetTownAgent failed: %d %s", resetResponse.Code, resetResponse.Body.String())
+	}
+}
+
+func TestCreateTownRunKeepsSelectedOfficeMembersStandby(t *testing.T) {
+	cfg, db := newTownTestFixture(t)
+	hub := ws.NewHub()
+	go hub.Run()
+	defer hub.Stop()
+
+	router := gin.New()
+	router.PUT("/api/town/office-members", UpdateTownOfficeMembers(cfg))
+	router.POST("/api/town/runs", CreateTownRun(cfg, db, hub))
+
+	selectResp := performTownRequest(router, http.MethodPut, "/api/town/office-members", `{"agentId":"coder","membership":"selected"}`)
+	if selectResp.Code != http.StatusOK {
+		t.Fatalf("select office member failed: %d %s", selectResp.Code, selectResp.Body.String())
+	}
+
+	runResp := performTownRequest(router, http.MethodPost, "/api/town/runs", `{"prompt":"你好","selectedAgents":["coder"]}`)
+	if runResp.Code != http.StatusOK {
+		t.Fatalf("createTownRun failed: %d %s", runResp.Code, runResp.Body.String())
+	}
+
+	var payload struct {
+		Run struct {
+			ID                  string   `json:"id"`
+			ParticipantAgentIDs []string `json:"participantAgentIds"`
+		} `json:"run"`
+	}
+	if err := json.Unmarshal(runResp.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode run payload: %v", err)
+	}
+	if len(payload.Run.ParticipantAgentIDs) != 0 {
+		t.Fatalf("expected no forced participants, got %#v", payload.Run.ParticipantAgentIDs)
+	}
+
+	waitForTownRunStatus(t, cfg, payload.Run.ID, "completed")
+
+	state, err := readTownSharedState(cfg)
+	if err != nil {
+		t.Fatalf("readTownSharedState: %v", err)
+	}
+	for _, run := range state.Runs {
+		if run.ID != payload.Run.ID {
+			continue
+		}
+		if len(run.ParticipantAgentIDs) != 0 {
+			t.Fatalf("expected stored run to have no forced participants, got %#v", run.ParticipantAgentIDs)
+		}
+	}
+	for _, instance := range state.Instances {
+		if instance.RunID == payload.Run.ID && instance.AgentID == "coder" {
+			t.Fatalf("expected coder to stay standby without spawned instance, got %#v", instance)
+		}
+	}
+
+	snapshot, err := buildTownSnapshot(cfg)
+	if err != nil {
+		t.Fatalf("buildTownSnapshot: %v", err)
+	}
+	for _, agent := range snapshot.Agents {
+		if agent.ID != "coder" {
+			continue
+		}
+		if agent.OfficeMembership != "selected" {
+			t.Fatalf("expected coder to remain selected, got %q", agent.OfficeMembership)
+		}
+		if agent.ExecutionState != "standby" {
+			t.Fatalf("expected coder to remain standby, got %q", agent.ExecutionState)
+		}
+		return
+	}
+	t.Fatalf("expected coder in snapshot")
+}
+
+func TestResetTownAgentClearsHistoricalErrorStateFromSnapshot(t *testing.T) {
+	cfg, db := newTownTestFixture(t)
+	hub := ws.NewHub()
+	go hub.Run()
+	defer hub.Stop()
+
+	router := gin.New()
+	router.POST("/api/town/agents/:id/reset", ResetTownAgent(cfg, db, hub))
+
+	_, err := updateTownSharedState(cfg, nil, func(state *townSharedState) error {
+		state.OfficeMembers["coder"] = "selected"
+		state.Runs = prependTownRun(state.Runs, townSharedRun{
+			ID:                  "run-old-error",
+			Title:               "旧失败任务",
+			Prompt:              "旧失败任务",
+			Source:              "manual",
+			Status:              "error",
+			PrimarySessionID:    "session-old-error",
+			CreatedAt:           time.Now().Add(-time.Minute).UnixMilli(),
+			UpdatedAt:           time.Now().Add(-time.Minute).UnixMilli(),
+			ParticipantAgentIDs: []string{"coder"},
+			SpawnedSessions: []townSharedSpawnedSession{
+				{ID: "spawn-old-error-coder", AgentID: "coder", Status: "error"},
+			},
+		})
+		state.Instances = prependTownInstance(state.Instances, townSharedInstance{
+			ID:        "instance-old-error-coder",
+			AgentID:   "coder",
+			RunID:     "run-old-error",
+			SessionID: "spawn-old-error-coder",
+			ZoneID:    "zone-run-old-error",
+			Status:    "error",
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed town shared state: %v", err)
+	}
+
+	before, err := buildTownSnapshot(cfg)
+	if err != nil {
+		t.Fatalf("buildTownSnapshot before reset: %v", err)
+	}
+	if before.Agents[0].ExecutionState != "error" {
+		t.Fatalf("expected pre-reset execution state error, got %q", before.Agents[0].ExecutionState)
+	}
+
+	resetResponse := performTownRequest(router, http.MethodPost, "/api/town/agents/coder/reset", `{"keepInOffice":true}`)
+	if resetResponse.Code != http.StatusOK {
+		t.Fatalf("resetTownAgent failed: %d %s", resetResponse.Code, resetResponse.Body.String())
+	}
+
+	after, err := buildTownSnapshot(cfg)
+	if err != nil {
+		t.Fatalf("buildTownSnapshot after reset: %v", err)
+	}
+	if len(after.Agents) == 0 {
+		t.Fatalf("expected agent snapshot after reset")
+	}
+	if after.Agents[0].ExecutionState != "standby" {
+		t.Fatalf("expected standby after reset, got %q", after.Agents[0].ExecutionState)
+	}
+	if after.Agents[0].SessionRole != "none" {
+		t.Fatalf("expected session role none after reset, got %q", after.Agents[0].SessionRole)
 	}
 }
 

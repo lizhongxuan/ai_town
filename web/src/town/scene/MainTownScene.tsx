@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react';
 import { ListFilter, Sparkles } from 'lucide-react';
 import TownHUD from '../components/TownHUD';
 import TownScene from './TownScene';
-import { TownAgent, TownAmbientResident, TownBuilding, TownSceneDef } from '../types/town';
+import { TownAgent, TownAmbientResident, TownBoss, TownBuilding, TownFacing, TownSceneDef } from '../types/town';
 
 const CLOUDS = [
   { id: 'cloud-1', left: '8%', top: '10%', scale: 1 },
@@ -42,6 +42,7 @@ const SPRITE_THEME: Record<string, { hair: string; outfit: string; accent: strin
 interface Props {
   scene: TownSceneDef;
   buildings: TownBuilding[];
+  boss: TownBoss;
   agents: TownAgent[];
   ambientResidents: TownAmbientResident[];
   selectedDisplayAgentId?: string;
@@ -253,9 +254,37 @@ function AmbientSprite({ resident }: { resident: TownAmbientResident }) {
   );
 }
 
+function PixelBossSprite({ facing }: { facing: TownFacing }) {
+  const singleEyeOffset =
+    facing === 'left' ? 'left-[15px]' : facing === 'right' ? 'right-[15px]' : 'left-[14px]';
+  return (
+    <div className="relative h-[68px] w-[52px] [image-rendering:pixelated]">
+      <div className="absolute left-[12px] top-0 h-[10px] w-[28px] border-[2px] border-[#2d1c0d] bg-[#1d4ed8]" />
+      <div className="absolute left-[10px] top-[10px] h-[20px] w-[32px] border-[2px] border-[#2d1c0d] bg-[#f6d6ad]" />
+      {facing === 'left' || facing === 'right' ? (
+        <div className={`absolute top-[16px] h-[4px] w-[4px] bg-[#2d1c0d] ${singleEyeOffset}`} />
+      ) : (
+        <>
+          <div className="absolute left-[14px] top-[16px] h-[4px] w-[4px] bg-[#2d1c0d]" />
+          <div className="absolute right-[14px] top-[16px] h-[4px] w-[4px] bg-[#2d1c0d]" />
+        </>
+      )}
+      <div className="absolute left-[8px] top-[30px] h-[22px] w-[36px] border-[2px] border-[#2d1c0d] bg-[#2563eb]" />
+      <div className="absolute left-[3px] top-[32px] h-[8px] w-[7px] border-[2px] border-[#2d1c0d] bg-[#dbeafe]" />
+      <div className="absolute right-[3px] top-[32px] h-[8px] w-[7px] border-[2px] border-[#2d1c0d] bg-[#dbeafe]" />
+      <div className="absolute left-[12px] top-[52px] h-[12px] w-[8px] border-[2px] border-[#2d1c0d] bg-[#5b3a28]" />
+      <div className="absolute right-[12px] top-[52px] h-[12px] w-[8px] border-[2px] border-[#2d1c0d] bg-[#5b3a28]" />
+      <div className="absolute -right-1 -top-1 border-[2px] border-[#2d1c0d] bg-[#fff4cc] px-1 text-[9px] font-black text-[#1d4ed8]">
+        AI
+      </div>
+    </div>
+  );
+}
+
 export default function MainTownScene({
   scene,
   buildings,
+  boss,
   agents,
   ambientResidents,
   selectedDisplayAgentId,
@@ -330,6 +359,19 @@ export default function MainTownScene({
         {buildings.map(building => (
           <VillageHouse key={building.id} building={building} scene={scene} onOpenOffice={onOpenOffice} />
         ))}
+
+        <div
+          className="absolute z-[19] -translate-x-1/2 -translate-y-1/2"
+          style={positionFromGrid(scene, boss.mainTownPosition.x, boss.mainTownPosition.y)}
+        >
+          <div className="flex flex-col items-center">
+            <PixelBossSprite facing={boss.mainTownFacing} />
+            <div className="mt-1 min-w-[128px] border-[3px] border-[#2d1c0d] bg-[#dbeafe] px-2 py-1 text-center text-[10px] font-black text-[#1e3a8a] shadow-[0_4px_0_#2d1c0d]">
+              <div>{boss.name}</div>
+              <div className="mt-0.5 text-[9px] text-[#1d4ed8]">{runningTasks > 0 ? '主控处理中' : '主控待命'}</div>
+            </div>
+          </div>
+        </div>
 
         <ForegroundRoof left="-2%" bottom="-2%" color="linear-gradient(180deg,#a66b42,#76411f)" />
         <ForegroundRoof right="-2%" bottom="-3%" color="linear-gradient(180deg,#8e6bca,#62379a)" />
