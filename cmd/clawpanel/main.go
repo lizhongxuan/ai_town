@@ -180,6 +180,7 @@ func runServer(stopCh chan struct{}) {
 	r.Use(gin.Recovery())
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
+	r.Use(handler.TownCSP())
 
 	// API 路由组
 	api := r.Group("/api")
@@ -365,11 +366,47 @@ func runServer(stopCh chan struct{}) {
 			auth.DELETE("/sessions/:id", handler.DeleteSession(cfg))
 
 			// Town 观测层
+			handler.InitTownStore(cfg, db)
+			handler.StartTownLogSyncer(cfg, wsHub) // F-09: 日志实时监听引擎
+			handler.InitTownFeatureFlags()
 			auth.GET("/town/snapshot", handler.GetTownSnapshot(cfg, db, wsHub))
-			auth.PUT("/town/office-members", handler.UpdateTownOfficeMembers(cfg))
+			auth.PUT("/town/office-members", handler.UpdateTownOfficeMembers(cfg, wsHub))
 			auth.POST("/town/runs", handler.CreateTownRun(cfg, db, wsHub))
 			auth.GET("/town/runs/:id/logs", handler.GetTownRunLogs(cfg, db))
+			auth.GET("/town/runs/:id/details", handler.GetTownRunDetails(cfg, db))
+			auth.GET("/town/runs/:id/replay", handler.GetTownRunReplay(cfg, db))
+			auth.POST("/town/observation/events", handler.TownEventAuth(cfg), handler.IngestTownObservationEvent(cfg, db))
+			auth.POST("/town/actor/bubble", handler.TownFeatureGate("bubble"), handler.PostTownActorBubble(cfg, wsHub))
 			auth.POST("/town/agents/:id/reset", handler.ResetTownAgent(cfg, db, wsHub))
+			auth.POST("/town/migrate", handler.TownMigrateGin(cfg, db))
+			auth.POST("/town/export", handler.TownExportGin(cfg, db))
+			auth.GET("/town/metrics", handler.GetTownMetrics())
+			auth.GET("/town/feature-flags", handler.GetTownFeatureFlags())
+			auth.PUT("/town/feature-flags", handler.ToggleTownFeatureFlag())
+			auth.GET("/town/recommendations", handler.GetTownRecommendations(cfg))
+			auth.GET("/town/plugins", handler.GetTownPlugins(cfg))
+			auth.POST("/town/plugins/register", handler.RegisterTownPluginHandler(cfg))
+
+			// T-201: RBAC & approval flow
+			auth.GET("/town/rbac/roles", handler.GetTownRoles())
+
+			// T-202: Multi-tenant isolation
+			auth.GET("/town/tenant", handler.GetTownTenantInfo())
+
+			// T-203: Recommendation A/B testing
+			auth.POST("/town/recommendations/feedback", handler.RecordTownRecommendationFeedback())
+			auth.GET("/town/ab/experiments", handler.GetTownABExperiments())
+			auth.POST("/town/ab/experiments", handler.CreateTownABExperiment())
+			auth.PUT("/town/ab/experiments/toggle", handler.ToggleTownABExperiment())
+			auth.GET("/town/ab/metrics", handler.GetTownABMetrics())
+
+			// T-204: Plugin marketplace & supply chain governance
+			auth.GET("/town/marketplace/plugins", handler.GetTownMarketplacePlugins())
+			auth.POST("/town/marketplace/plugins/submit", handler.SubmitTownMarketplacePlugin())
+			auth.POST("/town/marketplace/plugins/review", handler.ReviewTownMarketplacePlugin())
+			auth.GET("/town/marketplace/audit", handler.GetTownMarketplaceAudit())
+			auth.GET("/town/marketplace/publishers", handler.GetTownTrustedPublishers())
+			auth.POST("/town/marketplace/publishers", handler.AddTownTrustedPublisher())
 
 			// 配置检测 & 修复
 			auth.GET("/openclaw/config/check", handler.CheckConfig(cfg))

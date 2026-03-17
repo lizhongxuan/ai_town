@@ -200,11 +200,22 @@ const _api = {
   deleteSession: (id: string, agent?: string) => del(`/sessions/${id}${agent ? '?agent=' + agent : ''}`),
   // Town
   getTownSnapshot: () => get('/town/snapshot'),
-  updateTownOfficeMembers: (data: { agentId?: string; membership?: string; members?: Array<{ agentId: string; membership: string }> }) =>
+  updateTownOfficeMembers: (data: { agentId?: string; membership?: string; members?: Array<{ agentId: string; membership: string }>; expectedVersion?: number }) =>
     put('/town/office-members', data),
   createTownRun: (data: { title?: string; prompt: string; source?: 'manual' | 'im'; selectedAgents?: string[] }) =>
     post('/town/runs', data),
-  getTownRunLogs: (runId: string) => get(`/town/runs/${encodeURIComponent(runId)}/logs`),
+  getTownRunLogs: (runId: string, cursor?: string, limit?: number) => {
+    const params = new URLSearchParams();
+    if (cursor) params.set('cursor', cursor);
+    if (limit) params.set('limit', String(limit));
+    const qs = params.toString();
+    return get(`/town/runs/${encodeURIComponent(runId)}/logs${qs ? '?' + qs : ''}`);
+  },
+  getTownRunDetails: (runId: string, section?: string) => {
+    const qs = section ? `?section=${encodeURIComponent(section)}` : '';
+    return get(`/town/runs/${encodeURIComponent(runId)}/details${qs}`);
+  },
+  getTownRunReplay: (runId: string) => get(`/town/runs/${encodeURIComponent(runId)}/replay`),
   resetTownAgent: (agentId: string, data?: { keepInOffice?: boolean }) =>
     post(`/town/agents/${encodeURIComponent(agentId)}/reset`, data || {}),
   // Software & Tasks

@@ -1071,7 +1071,7 @@ func TestGetSessionsAllowsImplicitMainForDiskOnlyConfig(t *testing.T) {
 	}
 }
 
-func TestLoadDefaultAgentIDFallsBackToExistingDiskAgentWhenNoDefaultConfigured(t *testing.T) {
+func TestLoadDefaultAgentIDFallsBackToMainWhenNoListConfigured(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -1079,12 +1079,13 @@ func TestLoadDefaultAgentIDFallsBackToExistingDiskAgentWhenNoDefaultConfigured(t
 	writeJSON(t, filepath.Join(dir, "openclaw.json"), map[string]interface{}{
 		"agents": map[string]interface{}{},
 	})
+	// F-01: disk-only agents are no longer discovered; falls back to "main"
 	if err := os.MkdirAll(filepath.Join(dir, "agents", "work"), 0755); err != nil {
 		t.Fatalf("mkdir work agent dir: %v", err)
 	}
 
-	if got := loadDefaultAgentID(cfg); got != "work" {
-		t.Fatalf("expected disk-backed agent work to win when no explicit default is configured, got %q", got)
+	if got := loadDefaultAgentID(cfg); got != "main" {
+		t.Fatalf("expected fallback to main when no agents.list configured, got %q", got)
 	}
 }
 

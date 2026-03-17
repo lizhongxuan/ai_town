@@ -41,7 +41,27 @@ var (
 	errTownEmptyPatch      = errors.New("town office members patch is empty")
 	errTownManagerLocked   = errors.New("town manager membership is locked")
 	errTownSelectedLimit   = errors.New("town selected limit exceeded")
+	townStore              TownStore // initialized by InitTownStore
+
+	// Snapshot version cache (T-003)
+	townSnapshotCache       *TownSnapshot
+	townSnapshotCacheVer    int64
+	townSnapshotCacheAt     time.Time
+	townSnapshotCacheMu     sync.Mutex
+	townSnapshotCacheTTL    = 3 * time.Second
+	townConfigModTime       time.Time // F-02: openclaw.json ModTime for change detection
 )
+
+// InitTownStore sets the package-level TownStore.
+// If db is non-nil and TOWN_STORE_DRIVER != "file", uses DB store; otherwise file store.
+func InitTownStore(cfg *config.Config, db *sql.DB) {
+	driver := strings.TrimSpace(os.Getenv("TOWN_STORE_DRIVER"))
+	if db != nil && driver != "file" {
+		townStore = NewTownDBStore(db)
+	} else {
+		townStore = NewTownFileStore(cfg)
+	}
+}
 
 func GetTownSnapshot(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -56,7 +76,7 @@ func GetTownSnapshot(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFun
 			return
 		}
 
-		snapshot, err := buildTownSnapshot(cfg)
+		snapshot, err := buildTownSnapshotFromStore(cfg)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"ok":    false,
@@ -73,7 +93,7 @@ func GetTownSnapshot(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFun
 	}
 }
 
-func UpdateTownOfficeMembers(cfg *config.Config) gin.HandlerFunc {
+func UpdateTownOfficeMembers(cfg *config.Config, hub *ws.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !cfg.IsTownV3Enabled() {
 			c.JSON(http.StatusOK, gin.H{
@@ -108,30 +128,63 @@ func UpdateTownOfficeMembers(cfg *config.Config) gin.HandlerFunc {
 			return
 		}
 
-		agentIDs, agentSet := loadAgentIDs(cfg)
-		_ = agentIDs
+		_, agentSet := loadAgentIDs(cfg)
 		managerID := loadDefaultAgentID(cfg)
 
-		nextState, err := updateTownSharedState(cfg, req.ExpectedVersion, func(state *townSharedState) error {
-			for _, patch := range patches {
-				if patch.AgentID == "" {
-					return errors.New("town.office_members.agent_required")
-				}
-				if patch.AgentID == managerID {
-					return errTownManagerLocked
-				}
-				if _, ok := agentSet[patch.AgentID]; !ok {
-					return fmt.Errorf("town.office_members.agent_not_found:%s", patch.AgentID)
-				}
-				membership, ok := normalizeTownMembership(patch.Membership)
-				if !ok {
-					return fmt.Errorf("town.office_members.invalid_membership:%s", patch.Membership)
-				}
-				applyTownMembership(state.OfficeMembers, patch.AgentID, membership)
-			}
+		// F-03/F-06: Read current OFFICE.md, apply patches, write back
+		currentMembers := ReadOfficeMembers(cfg)
+		memberSet := make(map[string]bool, len(currentMembers))
+		for _, id := range currentMembers {
+			memberSet[id] = true
+		}
 
-			if countTownSelectedMembers(state.OfficeMembers) > townMaxSelectableAgents {
-				return errTownSelectedLimit
+		for _, patch := range patches {
+			if patch.AgentID == "" {
+				townError(c, http.StatusBadRequest, "town.office_members.agent_required", "agentId 不能为空")
+				return
+			}
+			if patch.AgentID == managerID {
+				townError(c, http.StatusBadRequest, "town.office_members.manager_locked", "主控 Agent 不能加入办公室")
+				return
+			}
+			if _, ok := agentSet[patch.AgentID]; !ok {
+				townError(c, http.StatusBadRequest, "town.office_members.agent_not_found", "Agent 不存在: "+patch.AgentID)
+				return
+			}
+			membership, ok := normalizeTownMembership(patch.Membership)
+			if !ok {
+				townError(c, http.StatusBadRequest, "town.office_members.invalid_membership", "无效的 membership: "+patch.Membership)
+				return
+			}
+			if membership == "selected" {
+				memberSet[patch.AgentID] = true
+			} else {
+				delete(memberSet, patch.AgentID)
+			}
+		}
+
+		if len(memberSet) > townMaxSelectableAgents {
+			townError(c, http.StatusBadRequest, "town.office_members.limit", fmt.Sprintf("办公室成员不能超过 %d 人", townMaxSelectableAgents))
+			return
+		}
+
+		// Build ordered list
+		newMembers := make([]string, 0, len(memberSet))
+		for id := range memberSet {
+			newMembers = append(newMembers, id)
+		}
+		sort.Strings(newMembers)
+
+		if err := WriteOfficeMembers(cfg, newMembers); err != nil {
+			townError(c, http.StatusInternalServerError, "town.office_members.write_failed", err.Error())
+			return
+		}
+
+		// Also update DB state for version bump and WS invalidation
+		nextState, err := townStore.UpdateState(req.ExpectedVersion, func(state *townSharedState) error {
+			state.OfficeMembers = make(map[string]string, len(newMembers))
+			for _, id := range newMembers {
+				state.OfficeMembers[id] = "selected"
 			}
 			return nil
 		})
@@ -139,19 +192,27 @@ func UpdateTownOfficeMembers(cfg *config.Config) gin.HandlerFunc {
 			handleTownOfficeMemberError(c, err)
 			return
 		}
+		InvalidateTownSnapshotCache()
+		BroadcastTownInvalidate(hub, nextState.Version)
 
 		appendTownAuditRecord(cfg, map[string]any{
 			"time":     time.Now().Format(time.RFC3339),
 			"version":  nextState.Version,
-			"members":  nextState.OfficeMembers,
+			"members":  newMembers,
 			"patches":  patches,
 			"clientIp": c.ClientIP(),
 		})
 
+		// Build response officeMembers map
+		respMembers := make(map[string]string, len(newMembers))
+		for _, id := range newMembers {
+			respMembers[id] = "selected"
+		}
+
 		c.JSON(http.StatusOK, gin.H{
 			"ok":            true,
 			"version":       nextState.Version,
-			"officeMembers": nextState.OfficeMembers,
+			"officeMembers": respMembers,
 		})
 	}
 }
@@ -183,7 +244,21 @@ func CreateTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc 
 		runID := fmt.Sprintf("run-%d", time.Now().UnixMilli())
 		managerID := loadDefaultAgentID(cfg)
 		_, agentSet := loadAgentIDs(cfg)
-		standbyAgents := uniqueTownAgents(req.SelectedAgents, agentSet, managerID)
+
+		// F-06: Task mode distinction
+		// office → force all OFFICE.md members as standby
+		// im → no standby, let openclaw-main decide
+		var standbyAgents []string
+		if source == "office" {
+			officeMembers := ReadOfficeMembers(cfg)
+			standbyAgents = uniqueTownAgents(officeMembers, agentSet, managerID)
+		} else if source == "im" {
+			// IM mode: no forced standby, openclaw-main decides
+			standbyAgents = nil
+		} else {
+			// manual or other: use explicitly selected agents
+			standbyAgents = uniqueTownAgents(req.SelectedAgents, agentSet, managerID)
+		}
 
 		now := time.Now()
 		run := townSharedRun{
@@ -199,12 +274,8 @@ func CreateTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc 
 			SpawnedSessions:     []townSharedSpawnedSession{},
 		}
 
-		_, err := updateTownSharedState(cfg, nil, func(state *townSharedState) error {
-			if source == "im" {
-				for _, agentID := range standbyAgents {
-					applyTownAutoAdded(state.OfficeMembers, agentID)
-				}
-			}
+		_, err := townStore.UpdateState(nil, func(state *townSharedState) error {
+			// F-05: removed applyTownAutoAdded — IM agents no longer permanently join office
 			for _, agentID := range standbyAgents {
 				state.RecentWeights[agentID] = maxTownInt(state.RecentWeights[agentID]+2, 2)
 			}
@@ -243,6 +314,8 @@ func CreateTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc 
 			townError(c, http.StatusInternalServerError, "town.run.state_write_failed", err.Error())
 			return
 		}
+		InvalidateTownSnapshotCache()
+		BroadcastTownInvalidate(hub, 0)
 
 		recordTownRuntimeEvent(db, hub, "openclaw.run.started", "主任务已创建", map[string]string{
 			"runId":  runID,
@@ -303,7 +376,16 @@ func GetTownRunLogs(cfg *config.Config, db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		state, err := readTownSharedState(cfg)
+		// T-011: cursor/limit pagination
+		cursor := strings.TrimSpace(c.Query("cursor"))
+		limit := 50
+		if v := strings.TrimSpace(c.Query("limit")); v != "" {
+			if n := parseTownInt(v, 50); n > 0 && n <= 200 {
+				limit = n
+			}
+		}
+
+		state, err := townStore.ReadState()
 		if err != nil {
 			townError(c, http.StatusInternalServerError, "town.run.state_read_failed", err.Error())
 			return
@@ -321,23 +403,48 @@ func GetTownRunLogs(cfg *config.Config, db *sql.DB) gin.HandlerFunc {
 			return
 		}
 
-		logs := make([]TownSnapshotLog, 0, 16)
+		allLogs := make([]TownSnapshotLog, 0, 16)
 		for _, logEntry := range state.Logs {
 			if logEntry.RunID != runID {
 				continue
 			}
-			logs = append(logs, toTownSnapshotLog(logEntry))
+			allLogs = append(allLogs, toTownSnapshotLog(logEntry))
 		}
-		sort.Slice(logs, func(i, j int) bool {
-			if logs[i].Time != logs[j].Time {
-				return logs[i].Time < logs[j].Time
+		sort.Slice(allLogs, func(i, j int) bool {
+			if allLogs[i].Time != allLogs[j].Time {
+				return allLogs[i].Time < allLogs[j].Time
 			}
-			return logs[i].ID < logs[j].ID
+			return allLogs[i].ID < allLogs[j].ID
 		})
 
+		// Apply cursor: skip entries until we pass the cursor ID
+		startIdx := 0
+		if cursor != "" {
+			for i, l := range allLogs {
+				if l.ID == cursor {
+					startIdx = i + 1
+					break
+				}
+			}
+		}
+
+		// Slice to limit
+		endIdx := startIdx + limit
+		if endIdx > len(allLogs) {
+			endIdx = len(allLogs)
+		}
+		page := allLogs[startIdx:endIdx]
+
+		var nextCursor string
+		if endIdx < len(allLogs) && len(page) > 0 {
+			nextCursor = page[len(page)-1].ID
+		}
+
 		c.JSON(http.StatusOK, gin.H{
-			"ok":   true,
-			"logs": logs,
+			"ok":         true,
+			"logs":       page,
+			"nextCursor": nextCursor,
+			"total":      len(allLogs),
 		})
 	}
 }
@@ -378,7 +485,7 @@ func ResetTownAgent(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc
 			return
 		}
 
-		state, err := updateTownSharedState(cfg, nil, func(state *townSharedState) error {
+		state, err := townStore.UpdateState(nil, func(state *townSharedState) error {
 			if req.KeepInOffice {
 				state.OfficeMembers[agentID] = "selected"
 			} else {
@@ -414,6 +521,8 @@ func ResetTownAgent(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc
 			townError(c, http.StatusInternalServerError, "town.reset.state_write_failed", err.Error())
 			return
 		}
+		InvalidateTownSnapshotCache()
+		BroadcastTownInvalidate(hub, state.Version)
 
 		recordTownRuntimeEvent(db, hub, "openclaw.agent.reset", fmt.Sprintf("%s 已被重置", agentID), map[string]string{
 			"agentId": agentID,
@@ -427,11 +536,63 @@ func ResetTownAgent(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc
 	}
 }
 
+func buildTownSnapshotFromStore(cfg *config.Config) (TownSnapshot, error) {
+	// T-003: version-based cache with short TTL to reduce polling pressure.
+	// F-02: also invalidate when openclaw.json changes (agent list updated).
+	townSnapshotCacheMu.Lock()
+	defer townSnapshotCacheMu.Unlock()
+
+	// F-02: detect openclaw.json changes
+	configPath := filepath.Join(cfg.OpenClawDir, "openclaw.json")
+	if info, err := os.Stat(configPath); err == nil {
+		if info.ModTime().After(townConfigModTime) {
+			townConfigModTime = info.ModTime()
+			townSnapshotCache = nil // force rebuild
+		}
+	}
+
+	state, err := townStore.ReadState()
+	if err != nil {
+		return TownSnapshot{}, err
+	}
+
+	now := time.Now()
+	if townSnapshotCache != nil &&
+		state.Version == townSnapshotCacheVer &&
+		now.Sub(townSnapshotCacheAt) < townSnapshotCacheTTL {
+		return *townSnapshotCache, nil
+	}
+
+	buildStart := time.Now()
+	snapshot, err := buildTownSnapshotFromState(cfg, state)
+	if err != nil {
+		return TownSnapshot{}, err
+	}
+	RecordTownSnapshotBuild(time.Since(buildStart))
+
+	townSnapshotCache = &snapshot
+	townSnapshotCacheVer = state.Version
+	townSnapshotCacheAt = now
+	return snapshot, nil
+}
+
+// InvalidateTownSnapshotCache forces the next snapshot request to rebuild.
+// Called after any state mutation (office members, runs, etc.).
+func InvalidateTownSnapshotCache() {
+	townSnapshotCacheMu.Lock()
+	townSnapshotCache = nil
+	townSnapshotCacheMu.Unlock()
+}
+
 func buildTownSnapshot(cfg *config.Config) (TownSnapshot, error) {
 	state, err := readTownSharedState(cfg)
 	if err != nil {
 		return TownSnapshot{}, err
 	}
+	return buildTownSnapshotFromState(cfg, state)
+}
+
+func buildTownSnapshotFromState(cfg *config.Config, state townSharedState) (TownSnapshot, error) {
 
 	agentIDs, _ := loadAgentIDs(cfg)
 	ocConfig, _ := cfg.ReadOpenClawJSON()
@@ -455,6 +616,9 @@ func buildTownSnapshot(cfg *config.Config) (TownSnapshot, error) {
 		latestInstanceByAgent[instance.AgentID] = instance
 	}
 
+	// F-04: Read OFFICE.md for location state machine
+	officeSet := OfficeMemberSet(cfg)
+
 	agents := make([]TownSnapshotAgent, 0, len(agentIDs))
 	for _, agentID := range agentIDs {
 		if agentID == managerID {
@@ -462,19 +626,30 @@ func buildTownSnapshot(cfg *config.Config) (TownSnapshot, error) {
 		}
 		sessions, lastActive := getAgentSessionStats(cfg, agentID)
 		item := findAgentConfig(ocConfig, agentID)
-		membership, _ := normalizeTownMembership(state.OfficeMembers[agentID])
-		if membership == "" {
-			membership = "unselected"
+
+		// F-04: membership from OFFICE.md instead of DB
+		membership := "unselected"
+		if officeSet[agentID] {
+			membership = "selected"
 		}
+
 		executionState := deriveTownExecutionState(membership, latestRunByAgent[agentID], latestInstanceByAgent[agentID])
 		sessionRole := "none"
 		if executionState == "busy" || executionState == "completed" || executionState == "error" {
 			sessionRole = "spawned"
 		}
+
+		// F-04: New location state machine
+		// busy/error → office_busy (on desk working)
+		// in OFFICE.md and idle → office_idle (wandering in office)
+		// not in OFFICE.md and idle → mainTown (wandering in town)
 		location := "mainTown"
-		if membership != "unselected" || executionState != "idle" {
-			location = "office"
+		if executionState == "busy" || executionState == "error" {
+			location = "office_busy"
+		} else if officeSet[agentID] {
+			location = "office_idle"
 		}
+
 		recentWeight := maxTownInt(state.RecentWeights[agentID], sessions)
 		if recentWeight <= 0 {
 			recentWeight = 1
@@ -928,10 +1103,16 @@ func toTownSnapshotRun(run townSharedRun) TownSnapshotRun {
 }
 
 func normalizeTownRunSource(raw string) string {
-	if strings.TrimSpace(raw) == "im" {
+	switch strings.TrimSpace(raw) {
+	case "im":
 		return "im"
+	case "office":
+		return "office"
+	case "logsync":
+		return "logsync"
+	default:
+		return "manual"
 	}
-	return "manual"
 }
 
 func normalizeTownRunStatus(raw string) string {
@@ -1066,7 +1247,7 @@ func finalizeTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub, req townBridge
 	result, err := dispatchTownRunBridge(ctx, cfg, req)
 	now := time.Now()
 	if err != nil {
-		_, _ = updateTownSharedState(cfg, nil, func(state *townSharedState) error {
+		_, _ = townStore.UpdateState(nil, func(state *townSharedState) error {
 			for runIndex := range state.Runs {
 				if state.Runs[runIndex].ID != req.RunID {
 					continue
@@ -1084,6 +1265,16 @@ func finalizeTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub, req townBridge
 					state.Instances[index].Status = "error"
 				}
 			}
+			// F-08: Return-to-position on error — remove instances for non-OFFICE.md agents
+			errOfficeSet := OfficeMemberSet(cfg)
+			cleanedErrInstances := state.Instances[:0]
+			for _, inst := range state.Instances {
+				if inst.RunID == req.RunID && !errOfficeSet[inst.AgentID] {
+					continue // not in OFFICE.md → remove, back to mainTown
+				}
+				cleanedErrInstances = append(cleanedErrInstances, inst)
+			}
+			state.Instances = cleanedErrInstances
 			appendTownStateEvent(state, townSharedEvent{
 				ID:        fmt.Sprintf("event-failed-%d", now.UnixMilli()),
 				Type:      "warning",
@@ -1103,16 +1294,19 @@ func finalizeTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub, req townBridge
 			})
 			return nil
 		})
+		InvalidateTownSnapshotCache()
+		BroadcastTownInvalidate(hub, 0)
 
 		recordTownRuntimeEvent(db, hub, "openclaw.run.failed", "Town 桥接 OpenClaw 失败", map[string]string{
 			"runId":   req.RunID,
 			"source":  req.Source,
 			"message": err.Error(),
 		})
+		RecordTownRunBridgeFailed()
 		return
 	}
 
-	_, _ = updateTownSharedState(cfg, nil, func(state *townSharedState) error {
+	_, _ = townStore.UpdateState(nil, func(state *townSharedState) error {
 		for runIndex := range state.Runs {
 			if state.Runs[runIndex].ID != req.RunID {
 				continue
@@ -1133,11 +1327,23 @@ func finalizeTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub, req townBridge
 			}
 			break
 		}
-		for index := range state.Instances {
-			if state.Instances[index].RunID == req.RunID {
-				state.Instances[index].Status = "completed"
+		// F-08: Return-to-position logic — remove instances for non-OFFICE.md agents
+		officeSet := OfficeMemberSet(cfg)
+		participantIDs := townBridgeParticipantAgentIDs(result)
+		cleanedInstances := state.Instances[:0]
+		for _, inst := range state.Instances {
+			if inst.RunID == req.RunID && !officeSet[inst.AgentID] {
+				// Not in OFFICE.md → remove instance, agent returns to mainTown
+				continue
 			}
+			if inst.RunID == req.RunID && officeSet[inst.AgentID] {
+				// In OFFICE.md → keep instance but mark idle
+				inst.Status = "completed"
+			}
+			cleanedInstances = append(cleanedInstances, inst)
 		}
+		state.Instances = cleanedInstances
+
 		appendTownStateEvent(state, townSharedEvent{
 			ID:        fmt.Sprintf("event-completed-%d", now.UnixMilli()),
 			Type:      "success",
@@ -1155,8 +1361,26 @@ func finalizeTownRun(cfg *config.Config, db *sql.DB, hub *ws.Hub, req townBridge
 			Time:   now.UnixMilli(),
 			Type:   "session",
 		})
+		// F-08: Log return-to-position for each participant
+		for _, agentID := range participantIDs {
+			dest := "主镇"
+			if officeSet[agentID] {
+				dest = "办公室"
+			}
+			appendTownStateLog(state, townSharedLog{
+				ID:      fmt.Sprintf("log-return-%d-%s", now.UnixMilli(), agentID),
+				RunID:   req.RunID,
+				AgentID: agentID,
+				Title:   fmt.Sprintf("%s 已回到%s", agentID, dest),
+				Detail:  fmt.Sprintf("任务完成，%s 回到%s。", agentID, dest),
+				Time:    now.UnixMilli(),
+				Type:    "system",
+			})
+		}
 		return nil
 	})
+	InvalidateTownSnapshotCache()
+	BroadcastTownInvalidate(hub, 0)
 
 	recordTownRuntimeEvent(db, hub, "openclaw.run.completed", "主任务已完成", map[string]string{
 		"runId":  req.RunID,
@@ -1225,7 +1449,12 @@ func dispatchTownRunBridgeLocal(ctx context.Context, cfg *config.Config, req tow
 	if err != nil {
 		return townBridgeResult{}, fmt.Errorf("Town 桥接 OpenClaw 失败: %w", err)
 	}
-	command := exec.CommandContext(ctx, bin, "agent", "--agent", req.ManagerAgentID, "--message", req.Prompt, "--json")
+	// F-07: Build prompt with standby agents context for openclaw-main
+	effectivePrompt := req.Prompt
+	if len(req.StandbyAgentIDs) > 0 {
+		effectivePrompt = fmt.Sprintf("可用协作 Agent: %s\n\n%s", strings.Join(req.StandbyAgentIDs, ", "), req.Prompt)
+	}
+	command := exec.CommandContext(ctx, bin, "agent", "--agent", req.ManagerAgentID, "--message", effectivePrompt, "--json")
 	command.Env = append(os.Environ(),
 		fmt.Sprintf("OPENCLAW_DIR=%s", cfg.OpenClawDir),
 		fmt.Sprintf("OPENCLAW_WORK=%s", cfg.OpenClawWork),
@@ -1708,6 +1937,7 @@ func buildTownCompletionDetail(output string) string {
 func handleTownOfficeMemberError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, errTownVersionConflict):
+		RecordTownStoreConflict()
 		townError(c, http.StatusConflict, "town.office_members.version_conflict", "办公室成员池版本冲突，请刷新后重试")
 	case errors.Is(err, errTownEmptyPatch):
 		townError(c, http.StatusBadRequest, "town.office_members.empty_patch", "办公室成员池补丁为空")
@@ -1746,4 +1976,18 @@ func maxTownInt(left, right int) int {
 		return left
 	}
 	return right
+}
+
+func parseTownInt(s string, fallback int) int {
+	n := 0
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return fallback
+		}
+		n = n*10 + int(ch-'0')
+	}
+	if n == 0 && s != "0" {
+		return fallback
+	}
+	return n
 }

@@ -20,31 +20,28 @@ func loadAgentIDs(cfg *config.Config) ([]string, map[string]struct{}) {
 		return []string{"main"}, map[string]struct{}{"main": {}}
 	}
 
+	// F-01: Agent 数据源统一 — 只从 openclaw.json 的 agents.list 读取
 	ocConfig, _ := cfg.ReadOpenClawJSON()
 	list := parseAgentsListFromConfig(ocConfig)
 	if len(list) > 0 {
 		return collectAgentIDsFromList(list)
 	}
-	ids, agentSet := collectAgentIDsFromConfigAndDisk(cfg, ocConfig)
-	defaultID := strings.TrimSpace(loadDefaultAgentID(cfg))
-	if defaultID != "" {
-		if _, ok := agentSet[defaultID]; !ok {
-			agentSet[defaultID] = struct{}{}
-			ids = append(ids, defaultID)
-			sortAgentIDs(ids)
-		}
+	// agents.list 为空时降级为单 Agent 模式
+	defaultID := strings.TrimSpace(legacyConfiguredDefaultAgentID(ocConfig))
+	if defaultID == "" {
+		defaultID = "main"
 	}
-	return ids, agentSet
+	return []string{defaultID}, map[string]struct{}{defaultID: {}}
 }
 
 func loadDefaultAgentID(cfg *config.Config) string {
 	if isLegacySingleAgentMode() {
 		return "main"
 	}
+	// F-01: 只从 openclaw.json 读取
 	ocConfig, _ := cfg.ReadOpenClawJSON()
 	list := parseAgentsListFromConfig(ocConfig)
 	defaultID := strings.TrimSpace(getDefaultAgentID(ocConfig, list))
-	defaultConfigured := hasExplicitDefaultAgent(ocConfig, list)
 	if len(list) > 0 {
 		if defaultID != "" {
 			for _, item := range list {
@@ -58,23 +55,9 @@ func loadDefaultAgentID(cfg *config.Config) string {
 				return id
 			}
 		}
-		return "main"
 	}
-
-	agentIDs, agentSet := collectAgentIDsFromConfigAndDisk(cfg, ocConfig)
 	if defaultID != "" {
-		if defaultConfigured {
-			return defaultID
-		}
-		if _, ok := agentSet[defaultID]; ok {
-			return defaultID
-		}
-	}
-	for _, id := range agentIDs {
-		id = strings.TrimSpace(id)
-		if id != "" {
-			return id
-		}
+		return defaultID
 	}
 	return "main"
 }

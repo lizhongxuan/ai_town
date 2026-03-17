@@ -145,10 +145,13 @@ func TestDispatchTownRunBridgeHTTPParsesNestedPayloadResponse(t *testing.T) {
 }
 
 func TestTownOfficeMembersVersionConflict(t *testing.T) {
-	cfg, db := newTownTestFixture(t)
+	cfg, _ := newTownTestFixture(t)
+	hub := ws.NewHub()
+	go hub.Run()
+	defer hub.Stop()
 
 	router := gin.New()
-	router.PUT("/api/town/office-members", UpdateTownOfficeMembers(cfg))
+	router.PUT("/api/town/office-members", UpdateTownOfficeMembers(cfg, hub))
 
 	snapshot, err := buildTownSnapshot(cfg)
 	if err != nil {
@@ -164,9 +167,6 @@ func TestTownOfficeMembersVersionConflict(t *testing.T) {
 	second := performTownRequest(router, http.MethodPut, "/api/town/office-members", body)
 	if second.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", second.Code, second.Body.String())
-	}
-	if db != nil {
-		db.Close()
 	}
 }
 
@@ -220,7 +220,7 @@ func TestCreateTownRunKeepsSelectedOfficeMembersStandby(t *testing.T) {
 	defer hub.Stop()
 
 	router := gin.New()
-	router.PUT("/api/town/office-members", UpdateTownOfficeMembers(cfg))
+	router.PUT("/api/town/office-members", UpdateTownOfficeMembers(cfg, hub))
 	router.POST("/api/town/runs", CreateTownRun(cfg, db, hub))
 
 	selectResp := performTownRequest(router, http.MethodPut, "/api/town/office-members", `{"agentId":"coder","membership":"selected"}`)
@@ -248,9 +248,9 @@ func TestCreateTownRunKeepsSelectedOfficeMembersStandby(t *testing.T) {
 
 	waitForTownRunStatus(t, cfg, payload.Run.ID, "completed")
 
-	state, err := readTownSharedState(cfg)
+	state, err := townStore.ReadState()
 	if err != nil {
-		t.Fatalf("readTownSharedState: %v", err)
+		t.Fatalf("townStore.ReadState: %v", err)
 	}
 	for _, run := range state.Runs {
 		if run.ID != payload.Run.ID {
@@ -266,7 +266,7 @@ func TestCreateTownRunKeepsSelectedOfficeMembersStandby(t *testing.T) {
 		}
 	}
 
-	snapshot, err := buildTownSnapshot(cfg)
+	snapshot, err := buildTownSnapshotFromStore(cfg)
 	if err != nil {
 		t.Fatalf("buildTownSnapshot: %v", err)
 	}
@@ -291,10 +291,15 @@ func TestResetTownAgentClearsHistoricalErrorStateFromSnapshot(t *testing.T) {
 	go hub.Run()
 	defer hub.Stop()
 
+	// F-03: Write OFFICE.md so coder is in office
+	if err := WriteOfficeMembers(cfg, []string{"coder"}); err != nil {
+		t.Fatalf("write OFFICE.md: %v", err)
+	}
+
 	router := gin.New()
 	router.POST("/api/town/agents/:id/reset", ResetTownAgent(cfg, db, hub))
 
-	_, err := updateTownSharedState(cfg, nil, func(state *townSharedState) error {
+	_, err := townStore.UpdateState(nil, func(state *townSharedState) error {
 		state.OfficeMembers["coder"] = "selected"
 		state.Runs = prependTownRun(state.Runs, townSharedRun{
 			ID:                  "run-old-error",
@@ -324,9 +329,9 @@ func TestResetTownAgentClearsHistoricalErrorStateFromSnapshot(t *testing.T) {
 		t.Fatalf("seed town shared state: %v", err)
 	}
 
-	before, err := buildTownSnapshot(cfg)
+	before, err := buildTownSnapshotFromStore(cfg)
 	if err != nil {
-		t.Fatalf("buildTownSnapshot before reset: %v", err)
+		t.Fatalf("buildTownSnapshotFromStore before reset: %v", err)
 	}
 	if before.Agents[0].ExecutionState != "error" {
 		t.Fatalf("expected pre-reset execution state error, got %q", before.Agents[0].ExecutionState)
@@ -337,9 +342,9 @@ func TestResetTownAgentClearsHistoricalErrorStateFromSnapshot(t *testing.T) {
 		t.Fatalf("resetTownAgent failed: %d %s", resetResponse.Code, resetResponse.Body.String())
 	}
 
-	after, err := buildTownSnapshot(cfg)
+	after, err := buildTownSnapshotFromStore(cfg)
 	if err != nil {
-		t.Fatalf("buildTownSnapshot after reset: %v", err)
+		t.Fatalf("buildTownSnapshotFromStore after reset: %v", err)
 	}
 	if len(after.Agents) == 0 {
 		t.Fatalf("expected agent snapshot after reset")
@@ -486,6 +491,8 @@ func newTownTestFixture(t *testing.T) (*config.Config, *sql.DB) {
 	oldPath := os.Getenv("PATH")
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
 
+	InitTownStore(cfg, db)
+
 	return cfg, db
 }
 
@@ -501,11 +508,12 @@ func performTownRequest(router *gin.Engine, method, target, body string) *httpte
 
 func waitForTownRunStatus(t *testing.T, cfg *config.Config, runID, status string) {
 	t.Helper()
+	_ = cfg
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		state, err := readTownSharedState(cfg)
+		state, err := townStore.ReadState()
 		if err != nil {
-			t.Fatalf("readTownSharedState: %v", err)
+			t.Fatalf("townStore.ReadState: %v", err)
 		}
 		for _, run := range state.Runs {
 			if run.ID == runID && run.Status == status {

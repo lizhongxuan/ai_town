@@ -266,6 +266,7 @@ export const TOWN_MOCK_STATE: TownState = {
   activeSceneId: 'mainTown',
   clock: '09:10',
   weather: '晴朗',
+  version: 0,
   boss: BOSS,
   agents: AGENTS,
   ambientResidents: AMBIENT_RESIDENTS,

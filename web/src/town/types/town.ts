@@ -157,6 +157,7 @@ export interface TownState {
   activeSceneId: TownSceneId;
   clock: string;
   weather: string;
+  version: number;
   boss: TownBoss;
   agents: TownAgent[];
   ambientResidents: TownAmbientResident[];

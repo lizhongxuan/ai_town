@@ -367,6 +367,7 @@ export function buildTownStateFromSnapshot(snapshot: TownSnapshot, prevState?: T
 
   base.clock = normalizeClock(snapshot.clock, base.clock);
   base.weather = typeof snapshot.weather === 'string' && snapshot.weather.trim() ? snapshot.weather.trim() : base.weather;
+  base.version = typeof snapshot.version === 'number' ? snapshot.version : base.version;
   base.maxSelectableAgents =
     Number.isFinite(snapshot.maxSelectableAgents) && Number(snapshot.maxSelectableAgents) > 0
       ? Number(snapshot.maxSelectableAgents)

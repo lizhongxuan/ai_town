@@ -484,8 +484,21 @@ export default function Town() {
     const membership = target.officeMembership === 'unselected' ? 'selected' : 'unselected';
     markAgentPending(agentId, true);
     try {
-      const response = await api.updateTownOfficeMembers({ agentId, membership });
+      const response = await api.updateTownOfficeMembers({
+        agentId,
+        membership,
+        expectedVersion: townState.version,
+      });
       if (!response?.ok) {
+        // T-004: Handle 409 version conflict — auto-refresh and hint retry
+        if (response?.code === 'town.office_members.version_conflict') {
+          await loadSnapshot(true);
+          dispatchView({
+            type: 'setSyncMessage',
+            message: '数据已被其他管理员更新，已自动刷新，请重试',
+          });
+          return;
+        }
         throw new Error(response?.error || '更新办公室成员失败');
       }
       await loadSnapshot(true);
