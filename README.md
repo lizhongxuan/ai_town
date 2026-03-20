@@ -1,4 +1,4 @@
-# ClawPanel
+# ClawPanel - AI TOWN
 
 OpenClaw 多 Agent 协作平台的管理面板，内置 AI 小镇可视化层。
 

@@ -423,6 +423,93 @@ func TestTownSnapshotExcludesDefaultManagerFromSelectableAgents(t *testing.T) {
 	}
 }
 
+func TestPostEventSyncsFeishuIMRunIntoTown(t *testing.T) {
+	cfg, db := newTownTestFixture(t)
+
+	router := gin.New()
+	router.POST("/api/events/log", PostEvent(cfg, db, nil))
+
+	inbound := `{"source":"feishu","type":"feishu.message.received","summary":"[飞书] ou_xxx: 请帮我整理发布说明","detail":"chatId=oc_123\nchatType=p2p"}`
+	inboundResp := performTownRequest(router, http.MethodPost, "/api/events/log", inbound)
+	if inboundResp.Code != http.StatusOK {
+		t.Fatalf("inbound event failed: %d %s", inboundResp.Code, inboundResp.Body.String())
+	}
+
+	state, err := townStore.ReadState()
+	if err != nil {
+		t.Fatalf("townStore.ReadState after inbound: %v", err)
+	}
+	if len(state.Runs) == 0 {
+		t.Fatalf("expected IM run after inbound event")
+	}
+	run := state.Runs[0]
+	if run.Source != "im" {
+		t.Fatalf("expected IM run source, got %q", run.Source)
+	}
+	if run.Status != "running" {
+		t.Fatalf("expected running IM run, got %q", run.Status)
+	}
+	if run.Prompt != "请帮我整理发布说明" {
+		t.Fatalf("expected prompt synced from Feishu summary, got %q", run.Prompt)
+	}
+	if run.PrimarySessionID != "imctx:feishu:oc_123" {
+		t.Fatalf("expected Feishu conversation key, got %q", run.PrimarySessionID)
+	}
+
+	reply := `{"source":"openclaw","type":"openclaw.reply","summary":"[飞书回复] 已经整理好了","detail":"channel=feishu\nchatId=oc_123"}`
+	replyResp := performTownRequest(router, http.MethodPost, "/api/events/log", reply)
+	if replyResp.Code != http.StatusOK {
+		t.Fatalf("reply event failed: %d %s", replyResp.Code, replyResp.Body.String())
+	}
+
+	state, err = townStore.ReadState()
+	if err != nil {
+		t.Fatalf("townStore.ReadState after reply: %v", err)
+	}
+	if len(state.Runs) == 0 {
+		t.Fatalf("expected IM run after reply")
+	}
+	if state.Runs[0].ID != run.ID {
+		t.Fatalf("expected reply to complete existing run %q, got %q", run.ID, state.Runs[0].ID)
+	}
+	if state.Runs[0].Status != "completed" {
+		t.Fatalf("expected IM run completed after reply, got %q", state.Runs[0].Status)
+	}
+
+	var foundReplyLog bool
+	for _, entry := range state.Logs {
+		if entry.RunID == run.ID && entry.Title == "已发送回复" {
+			foundReplyLog = true
+			break
+		}
+	}
+	if !foundReplyLog {
+		t.Fatalf("expected reply log for completed IM run")
+	}
+
+	events, _, err := model.GetEvents(db, 20, 0, "", "")
+	if err != nil {
+		t.Fatalf("GetEvents: %v", err)
+	}
+	var hasIMReceived, hasIMCompleted bool
+	for _, event := range events {
+		switch event.Type {
+		case "openclaw.im.received":
+			hasIMReceived = true
+		case "openclaw.run.completed":
+			if strings.Contains(event.Detail, "source=im") {
+				hasIMCompleted = true
+			}
+		}
+	}
+	if !hasIMReceived {
+		t.Fatalf("expected openclaw.im.received runtime event")
+	}
+	if !hasIMCompleted {
+		t.Fatalf("expected openclaw.run.completed runtime event for IM flow")
+	}
+}
+
 func newTownTestFixture(t *testing.T) (*config.Config, *sql.DB) {
 	t.Helper()
 	root := t.TempDir()

@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/zhaoxinyi02/ClawPanel/internal/config"
 	"github.com/zhaoxinyi02/ClawPanel/internal/model"
 	ws "github.com/zhaoxinyi02/ClawPanel/internal/websocket"
 )
@@ -47,7 +48,7 @@ func ClearEvents(db *sql.DB) gin.HandlerFunc {
 }
 
 // PostEvent 外部服务提交事件（无需认证）
-func PostEvent(db *sql.DB, hub *ws.Hub) gin.HandlerFunc {
+func PostEvent(cfg *config.Config, db *sql.DB, hub *ws.Hub) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req struct {
 			Source  string `json:"source"`
@@ -96,6 +97,8 @@ func PostEvent(db *sql.DB, hub *ws.Hub) gin.HandlerFunc {
 				hub.Broadcast(payload)
 			}
 		}
+
+		syncTownWithExternalLogEvent(cfg, db, hub, req.Source, req.Type, req.Summary, req.Detail)
 
 		c.JSON(http.StatusOK, gin.H{"ok": true, "id": id})
 	}
